@@ -157,9 +157,7 @@ pub fn (mut ls Vls) did_change(params lsp.DidChangeTextDocumentParams, mut wr Re
 		)
 	}
 
-	old_str := new_src.string()
 	new_src = new_src.rebalance_if_needed()
-	buffer << 'rebalance changes content? ${old_str != new_src.string()}'
 	// wr.log_message('${ls.files[uri].tree.get_changed_ranges(new_tree)}', .info)
 
 	buffer << 'rope len: ${new_src.length}, string len: ${new_src.string().len}'
