@@ -390,7 +390,10 @@ fn create_fold(tsrange C.TSRange, kind string) lsp.FoldingRange {
 	return lsp.FoldingRange{
 		start_line: range.start.line
 		start_character: range.start.character
-		end_line: range.end.line
+		end_line: match kind {
+			lsp.folding_range_kind_region { range.end.line - 1 }
+			else { range.end.line }
+		}
 		end_character: range.end.character
 		kind: kind
 	}
