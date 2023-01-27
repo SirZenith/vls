@@ -113,6 +113,7 @@ pub fn (mut ls Vls) did_change(params lsp.DidChangeTextDocumentParams, mut wr Re
 	mut new_src := ls.files[uri].source
 	mut new_tree := ls.files[uri].tree.raw_tree.copy()
 	mut first_affected_start_offset := u32(0)
+	mut buffer := []string{}
 
 	for change_i, content_change in params.content_changes {
 		change_text := content_change.text
@@ -122,6 +123,10 @@ pub fn (mut ls Vls) did_change(params lsp.DidChangeTextDocumentParams, mut wr Re
 		start_pos := content_change.range.start
 		old_end_pos := content_change.range.end
 		new_end_pos := compute_position(new_src, new_end_idx)
+
+		old_range := '[${start_idx}, ${old_end_idx}]'
+		new_range := '[${start_idx}, ${new_end_idx}]'
+		buffer << '${old_range} -> ${new_range}: "${change_text}"'
 
 		if change_i == 0 {
 			first_affected_start_offset = u32(start_idx)
@@ -150,9 +155,15 @@ pub fn (mut ls Vls) did_change(params lsp.DidChangeTextDocumentParams, mut wr Re
 		)
 	}
 
+	old_str := new_src.string()
 	new_src = new_src.rebalance_if_needed()
+	buffer << 'rebalance changes content? ${old_str != new_src.string()}'
 	// wr.log_message('${ls.files[uri].tree.get_changed_ranges(new_tree)}', .info)
 
+	buffer << 'rope len: ${new_src.length}, string len: ${new_src.string().len}'
+	buffer << '-'.repeat(80)
+	buffer << new_src.debug_str()
+	wr.log_message(buffer.join('\n'), .info)
 	// wr.log_message('new tree: ${new_tree.root_node().sexpr_str()}', .info)
 	ls.files[uri].tree = ls.parser.parse_string(source: new_src.string(), tree: new_tree)
 	ls.files[uri].source = new_src

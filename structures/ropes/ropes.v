@@ -1,6 +1,8 @@
 // this is a v port of https://github.com/vinzmay/go-rope/blob/master/rope.go
 module ropes
 
+import strings
+
 [heap]
 pub struct Rope {
 pub mut:
@@ -41,6 +43,69 @@ pub fn (r &Rope) len() int {
 		return 0
 	}
 	return r.length
+}
+
+fn get_indent_str(indent_level int) string {
+	mut s := '  '.repeat(indent_level)
+	if indent_level > 0 {
+		s += '|'
+	}
+	return s
+}
+
+fn write_debug_content(mut builder strings.Builder, r &Rope, indent_level int) {
+	if isnil(r) {
+		return
+	}
+
+	indent := get_indent_str(indent_level)
+	mut null_cnt := 0
+	for it in r.value {
+		if it == 0 {
+			null_cnt++
+		}
+	}
+
+	builder.write_string('${indent}[info] {\n')
+
+	builder.write_string('${indent}  content len: ${r.value.len}\n')
+	builder.write_string('${indent}  depth: ${r.depth}\n')
+	builder.write_string('${indent}  length: ${r.length}\n')
+	builder.write_string('${indent}  left: ${!isnil(r.left)}\n')
+	builder.write_string('${indent}  right: ${!isnil(r.right)}\n')
+	builder.write_string('${indent}  null count: ${null_cnt}\n')
+	builder.write_string('${indent}}\n')
+
+	if !isnil(r.left) {
+		builder.write_string('${indent}left:\n')
+		write_debug_content(mut builder, r.left, indent_level + 1)
+	}
+
+	/*
+	builder.write_string(indent)
+	for it in r.value {
+		builder.write_rune(if it != 0 {
+			it
+		} else {
+			`\``
+		})
+		
+		if it == `\n` {
+			builder.write_string(indent)
+		}
+	}
+	*/
+
+	if !isnil(r.right) {
+		builder.write_string('\n${indent}right:\n')
+		write_debug_content(mut builder, r.right, indent_level + 1)
+	}
+}
+
+pub fn (r &Rope) debug_str() string {
+	mut builder := strings.new_builder(r.length)
+	write_debug_content(mut builder, r, 0)
+	return builder.str()
 }
 
 // str() has & appended which is annoying ://
