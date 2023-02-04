@@ -12,6 +12,8 @@ pub mut:
 	// Default reporter to be used
 	// Used for diagnostics
 	reporter Reporter
+	// Store unresolved symbols, update every time a new symbol is added to store.
+	resolver &Resolver
 	// Current version of the file
 	cur_version int
 	// List of imports per directory
@@ -60,6 +62,10 @@ pub fn (mut ss Store) default_context() AnalyzerContext {
 // report inserts the report to the reporter
 pub fn (mut ss Store) report(report Report) {
 	ss.reporter.report(report)
+}
+
+pub fn (mut ss Store) report_resolve(file_path string) {
+	ss.resolver.report(mut ss.reporter, file_path)
 }
 
 [if trace ?]
@@ -380,10 +386,6 @@ pub fn (mut ss Store) get_scope_from_node(file_path string, node ast.Node) !&Sco
 
 // symbol_name_from_node extracts the symbol's kind, name, and module name from the given node
 pub fn symbol_name_from_node(node ast.Node, src_text tree_sitter.SourceText) (SymbolKind, string, string) {
-	// if node.is_null() {
-	// 	return SymbolKind.typedef, '', 'void'
-	// }
-
 	mut module_name := ''
 	mut symbol_name := ''
 
@@ -488,6 +490,12 @@ pub fn symbol_name_from_node(node ast.Node, src_text tree_sitter.SourceText) (Sy
 		}
 		.multi_return_type {
 			return SymbolKind.multi_return, '', node.text(src_text)
+		}
+		.call_expression {
+			function_node := node.child_by_field_name('function') or {
+				return SymbolKind.typedef, '', 'void'
+			}
+			return symbol_name_from_node(function_node, src_text)
 		}
 		else {
 			// type_identifier should go here

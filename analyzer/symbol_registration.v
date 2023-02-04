@@ -590,9 +590,27 @@ fn (mut sr SymbolAnalyzer) short_var_decl(var_decl ast.Node) ![]&Symbol {
 		right := right_expr_lists.named_child(i) or {
 			return report_error('rhs[${i}] not found', right_expr_lists.range())
 		}
+		_, mod_name, sym_name := symbol_name_from_node(right, sr.context.text)
+		mod_path := sr.context.store.get_module_path(sr.context.file_path, mod_name)
 		mut right_syms := sr.expression(right)!
 		for mr_sym in right_syms {
-			vars << sr.register_variable(mr_sym, left_expr_lists, u32(cur_left))!
+			result := sr.register_variable(mr_sym, left_expr_lists, u32(cur_left))!
+			vars << result
+
+			if result.return_sym.is_void() {
+				sr.trace_report(
+					kind: .notice
+					message: 'rigister ${result.name} to ${sr.context.store.resolver.get_symbol_identifier(mod_path,
+						sym_name)}'
+					range: result.range
+					file_path: sr.context.file_path
+				)
+				sr.context.store.resolver.register(mod_path, sym_name,
+					index: cur_left
+					sym: result
+				) or {}
+			}
+
 			cur_left++
 		}
 	}
@@ -612,9 +630,11 @@ fn (mut sr SymbolAnalyzer) register_variable(sym &Symbol, left_expr_lists ast.No
 	}
 
 	name := left.text(sr.context.text)
+	/*
 	if sym.is_void() {
 		return report_error('invalid type for identifier `${name}`', left_expr_lists.range())
 	}
+	*/
 
 	return &Symbol{
 		name: name
@@ -1170,6 +1190,12 @@ pub fn (mut sr SymbolAnalyzer) analyze_from_cursor(mut cursor TreeCursor) []&Sym
 			if sym.kind == .variable {
 				global_scope.register(*sym) or { continue }
 			}
+			sr.trace_report(
+				kind: .notice
+				message: 'resolving references to ${sym.name}'
+				range: sym.range
+			)
+			sr.context.store.resolver.resolve_with(*sym)
 
 			symbols << syms[i]
 		}

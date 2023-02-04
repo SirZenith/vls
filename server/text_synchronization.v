@@ -28,6 +28,7 @@ fn (mut ls Vls) analyze_file(file File, affected_node_type v.NodeType, affected_
 		ls.store.analyze(context, file.tree, start_line_nr: affected_line)
 	}
 
+	ls.store.report_resolve(file_path)
 	ls.reporter.publish(mut ls.writer, file.uri)
 }
 

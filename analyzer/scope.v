@@ -1,5 +1,7 @@
 module analyzer
 
+import strings
+
 [heap]
 pub struct ScopeTree {
 pub mut:
@@ -12,6 +14,29 @@ pub mut:
 
 pub fn (scope &ScopeTree) str() string {
 	return if isnil(scope) { '<nil scope>' } else { scope.symbols.str() }
+}
+
+pub fn (scope &ScopeTree) debug_str(indent string) string {
+	if scope.symbols.len == 0 && scope.children.len == 0 {
+		return '${indent}{}'
+	}
+
+	mut builder := strings.new_builder(30)
+	builder.write_string('${indent}{\n')
+
+	for sym in scope.symbols {
+		builder.write_string(sym.debug_str(indent + '\t'))
+		builder.write_byte(`\n`)
+	}
+
+	for child in scope.children {
+		builder.write_string(child.debug_str(indent + '\t'))
+		builder.write_byte(`\n`)
+	}
+
+	builder.write_string('${indent}}')
+
+	return builder.str()
 }
 
 [unsafe]
@@ -58,16 +83,19 @@ pub fn (mut scope ScopeTree) register(info &Symbol) ! {
 	// Just to ensure that scope is not null
 	if isnil(scope) {
 		return
-	} else if info.kind == .variable && info.return_sym.is_void() {
+	}
+	/*
+	else if info.kind == .variable && info.return_sym.is_void() {
 		return
 	}
+	*/
 
 	mut existing_idx := scope.symbols.index(info.name)
 	if existing_idx != -1 {
 		mut existing_sym := scope.symbols[existing_idx]
 		// unsafe { scope.symbols[existing_idx].free() }
 		if existing_sym.file_version >= info.file_version {
-			return error('Symbol already exists. (Scope Range=$scope.start_byte-$scope.end_byte) (idx=$existing_idx) (name="$existing_sym.name")')
+			return error('Symbol already exists. (Scope Range=${scope.start_byte}-${scope.end_byte}) (idx=${existing_idx}) (name="${existing_sym.name}")')
 		}
 
 		if existing_sym.name != info.name {

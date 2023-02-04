@@ -25,7 +25,24 @@ fn get_hover_data(mut store analyzer.Store, node ast.Node, uri lsp.DocumentUri, 
 		return none
 	}
 
-	sym := get_hovered_symbol_from_node(mut store, node, file_path, source)?
+	sym := get_hovered_symbol_from_node(mut store, node, file_path, source) or {
+		$if !trace ? {
+			return none
+		} $else {
+			file_scope := store.opened_scopes[file_path] or {
+				return lsp.Hover{
+					contents: 'failed to find corresponding scope'
+					range: tsrange_to_lsp_range(node.range())
+				}
+			}
+			scope := file_scope.innermost(node.start_byte(), node.end_byte()) or { file_scope }
+
+			return lsp.Hover{
+				contents: scope.debug_str('')
+				range: tsrange_to_lsp_range(node.range())
+			}
+		}
+	}
 	mut range := node.range()
 	mut hover_range := get_hovered_range_from_node(node, offset)
 	mut contents := lsp.HoverResponseContent('')
@@ -73,7 +90,6 @@ fn get_hovered_symbol_from_node(mut store analyzer.Store, node ast.Node, file_pa
 		return analyzer.void_sym
 	}
 
-	// TODO: make sure infer_symbol_from_node doesn't return nil reference.
 	mut sym := store.infer_symbol_from_node(file_path, node, source) or {
 		closest_parent := closest_symbol_node_parent(node)
 		store.infer_symbol_from_node(file_path, closest_parent, source) or { analyzer.void_sym }

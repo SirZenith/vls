@@ -1,5 +1,7 @@
 module analyzer
 
+import strings
+
 // it should be imported just to have those C type symbols available
 // import tree_sitter
 // import os
@@ -44,30 +46,32 @@ pub enum SymbolKind {
 	variable
 	sumtype
 	function_type
+	never
 }
 
 pub fn (kind SymbolKind) str() string {
-	match kind {
-		.void { return 'void' }
-		.placeholder { return 'placeholder' }
-		.ref { return 'ref' }
-		.array_ { return 'array' }
-		.map_ { return 'map' }
-		.multi_return { return 'multi_return' }
-		.optional { return 'optional' }
-		.result { return 'result' }
-		.chan_ { return 'chan' }
-		.variadic { return 'variadic' }
-		.function { return 'function' }
-		.struct_ { return 'struct' }
-		.enum_ { return 'enum' }
-		.typedef { return 'typedef' }
-		.interface_ { return 'interface' }
-		.field { return 'field' }
-		.embedded_field { return 'embedded_field' }
-		.variable { return 'variable' }
-		.sumtype { return 'sumtype' }
-		.function_type { return 'function_type' }
+	return match kind {
+		.void { 'void' }
+		.placeholder { 'placeholder' }
+		.ref { 'ref' }
+		.array_ { 'array' }
+		.map_ { 'map' }
+		.multi_return { 'multi_return' }
+		.optional { 'optional' }
+		.result { 'result' }
+		.chan_ { 'chan' }
+		.variadic { 'variadic' }
+		.function { 'function' }
+		.struct_ { 'struct' }
+		.enum_ { 'enum' }
+		.typedef { 'typedef' }
+		.interface_ { 'interface' }
+		.field { 'field' }
+		.embedded_field { 'embedded_field' }
+		.variable { 'variable' }
+		.sumtype { 'sumtype' }
+		.function_type { 'function_type' }
+		.never { 'never' }
 	}
 }
 
@@ -167,6 +171,38 @@ pub fn (sym &Symbol) str() string {
 	}
 
 	return sym.name
+}
+
+pub fn (sym &Symbol) debug_str(indent string) string {
+	mut builder := strings.new_builder(30)
+
+	builder.write_string('${indent}${sym.name}')
+	if sym.is_type_defining_kind() {
+		builder.write_string('{')
+		for child in sym.children_syms {
+			builder.write_string(child.debug_str(indent + '\t'))
+			builder.write_byte(`\n`)
+		}
+		if sym.children_syms.len > 0 {
+			builder.write_string('${indent}}')
+		} else {
+			builder.write_string(' }')
+		}
+	} else {
+		match sym.kind {
+			.variable, .field {
+				builder.write_string(': ${sym.return_sym.name}')
+			}
+			.function {
+				builder.write_string(': function -> ${sym.return_sym.name}')
+			}
+			else {
+				builder.write_string('(${sym.kind})')
+			}
+		}
+	}
+
+	return builder.str()
 }
 
 const sym_kinds_allowed_to_print_parent = [SymbolKind.typedef, .function]
@@ -282,7 +318,11 @@ pub fn (mut sym Symbol) add_child_allow_duplicated(mut new_child_sym Symbol, add
 
 // is_void returns true if a symbol is void/invalid
 pub fn (sym &Symbol) is_void() bool {
-	if (sym.kind == .ref || sym.kind == .array_) && sym.children_syms.len >= 1 {
+	if isnil(sym) {
+		return true
+	}
+
+	if sym.kind in [.ref, .array_] && sym.children_syms.len >= 1 {
 		return sym.children_syms[0].is_void()
 	}
 
