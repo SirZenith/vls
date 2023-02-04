@@ -105,7 +105,7 @@ pub fn (mut scope ScopeTree) register(info &Symbol) ! {
 		existing_sym.return_sym = info.return_sym
 		existing_sym.access = info.access
 		existing_sym.range = info.range
-		existing_sym.file_path = info.file_path
+		existing_sym.file_id = info.file_id
 		existing_sym.file_version = info.file_version
 	} else {
 		scope.symbols << info

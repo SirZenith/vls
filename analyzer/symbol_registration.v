@@ -26,7 +26,7 @@ mut:
 	first_var_decl_pos C.TSRange
 }
 
-fn (sr &SymbolAnalyzer) new_top_level_symbol(identifier_node ast.Node, access SymbolAccess, kind SymbolKind) !&Symbol {
+fn (mut sr SymbolAnalyzer) new_top_level_symbol(identifier_node ast.Node, access SymbolAccess, kind SymbolKind) !&Symbol {
 	id_node_type_name := identifier_node.type_name
 	if id_node_type_name == .qualified_type {
 		return report_error('Invalid top-level node type `${id_node_type_name}`', identifier_node.range())
@@ -36,7 +36,7 @@ fn (sr &SymbolAnalyzer) new_top_level_symbol(identifier_node ast.Node, access Sy
 		access: access
 		kind: kind
 		is_top_level: true
-		file_path: sr.context.file_path
+		file_id: sr.context.file_id
 		file_version: sr.context.file_version
 	}
 
@@ -144,7 +144,7 @@ fn (mut sr SymbolAnalyzer) const_decl(const_node ast.Node) ![]&Symbol {
 			range: name_node.range()
 			is_top_level: true
 			is_const: true
-			file_path: sr.context.file_path
+			file_id: sr.context.file_id
 			file_version: sr.context.file_version
 			return_sym: return_sym
 		}
@@ -228,7 +228,7 @@ fn (mut sr SymbolAnalyzer) struct_field_decl(field_access SymbolAccess, field_de
 			access: field_access
 			return_sym: field_sym
 			is_top_level: true
-			file_path: sr.context.file_path
+			file_id: sr.context.file_id
 			file_version: sr.context.file_version
 		}
 	}
@@ -240,7 +240,7 @@ fn (mut sr SymbolAnalyzer) struct_field_decl(field_access SymbolAccess, field_de
 		access: field_access
 		return_sym: field_sym
 		is_top_level: true
-		file_path: sr.context.file_path
+		file_id: sr.context.file_id
 		file_version: sr.context.file_version
 	}
 }
@@ -292,7 +292,7 @@ fn (mut sr SymbolAnalyzer) interface_decl(interface_decl_node ast.Node) !&Symbol
 					access: method_access
 					range: name_node.range()
 					return_sym: sr.context.find_symbol_by_type_node(result_node) or { void_sym }
-					file_path: sr.context.file_path
+					file_id: sr.context.file_id
 					file_version: sr.context.file_version
 					is_top_level: true
 				}
@@ -377,7 +377,7 @@ fn (mut sr SymbolAnalyzer) enum_decl(enum_decl_node ast.Node) !&Symbol {
 			access: access
 			return_sym: sym
 			is_top_level: true
-			file_path: sr.context.file_path
+			file_id: sr.context.file_id
 			file_version: sr.context.file_version
 		}
 
@@ -643,7 +643,7 @@ fn (mut sr SymbolAnalyzer) register_variable(sym &Symbol, left_expr_lists ast.No
 		range: left.range()
 		return_sym: sym
 		is_top_level: false
-		file_path: sr.context.file_path
+		file_id: sr.context.file_id
 		file_version: sr.context.file_version
 	}
 }
@@ -675,7 +675,7 @@ fn (mut sr SymbolAnalyzer) fn_literal(fn_node ast.Node) !&Symbol {
 	// and we dont want to pollute non-permanent function types
 	mut new_sym := &Symbol{
 		name: anon_fn_prefix
-		file_path: sr.context.file_path
+		file_id: sr.context.file_id
 		file_version: sr.context.file_version
 		is_top_level: true
 		kind: .function_type
@@ -866,7 +866,7 @@ fn (mut sr SymbolAnalyzer) for_statement(for_stmt_node ast.Node) ! {
 							range: idx_node.range()
 							is_top_level: false
 							return_sym: key_sym
-							file_path: sr.context.file_path
+							file_id: sr.context.file_id
 							file_version: sr.context.file_version
 						}
 
@@ -903,7 +903,7 @@ fn (mut sr SymbolAnalyzer) for_statement(for_stmt_node ast.Node) ! {
 						is_top_level: false
 						return_sym: return_sym
 						access: symbol_access
-						file_path: sr.context.file_path
+						file_id: sr.context.file_id
 						file_version: sr.context.file_version
 					}
 
@@ -929,7 +929,7 @@ fn (mut sr SymbolAnalyzer) for_statement(for_stmt_node ast.Node) ! {
 							range: value_node.range()
 							is_top_level: false
 							return_sym: iter_next_method.return_sym.parent_sym
-							file_path: sr.context.file_path
+							file_id: sr.context.file_id
 							file_version: sr.context.file_version
 						}
 
@@ -998,7 +998,7 @@ fn (mut sr SymbolAnalyzer) expression(node ast.Node) ![]&Symbol {
 							start_byte: block_node.start_byte()
 							end_byte: block_node.start_byte()
 						}
-						file_path: sr.context.file_path
+						file_id: sr.context.file_id
 						file_version: sr.context.file_version
 					})!
 				}
@@ -1135,7 +1135,7 @@ fn extract_parameter_list(mut ctx AnalyzerContext, node ast.Node) []&Symbol {
 			access: access
 			return_sym: return_sym
 			is_top_level: false
-			file_path: ctx.file_path
+			file_id: ctx.file_id
 			file_version: ctx.file_version
 		}
 	}
@@ -1173,29 +1173,27 @@ pub fn (mut sr SymbolAnalyzer) analyze_from_cursor(mut cursor TreeCursor) []&Sym
 	mut global_scope := unsafe { sr.context.store.opened_scopes[sr.context.file_path] }
 	mut symbols := []&Symbol{cap: 255}
 	for got_node in cursor {
+		// Reminder: without calling child method on `got_node`, cursor only 
+		// iterates on top level declarations.
+		// As a result, only top level symbols are handled here in this loop.
 		mut syms := sr.analyze(got_node) or {
 			sr.trace_report_error(err)
 			continue
 		}
 		for i, mut sym in syms {
 			if sym.kind == .function && !sym.parent_sym.is_void() {
+				// method definition
 				continue
 			}
 
 			sr.context.store.register_symbol(mut *sym) or {
-				// add error message
+				sr.trace_report_error(err)
 				continue
 			}
 
 			if sym.kind == .variable {
 				global_scope.register(*sym) or { continue }
 			}
-			sr.trace_report(
-				kind: .notice
-				message: 'resolving references to ${sym.name}'
-				range: sym.range
-			)
-			sr.context.store.resolver.resolve_with(*sym)
 
 			symbols << syms[i]
 		}

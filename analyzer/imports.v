@@ -217,7 +217,10 @@ pub fn (mut imp Importer) import_modules(mut imports []Import, import_idxs []int
 			full_path := os.join_path(new_import.path, file_name)
 			content_str := os.read_file(full_path) or { continue }
 			tree_from_import := parser.parse_string(source: content_str)
-			context := imp.context.store.with(file_path: full_path, text: Runes(content_str.runes()))
+			context := imp.context.store.with(
+				file_path: full_path,
+				text: Runes(content_str.runes())
+			)
 
 			// Import module but from different lookup oath other than the project
 			modules_from_dir := os.join_path(context.file_dir, 'modules')

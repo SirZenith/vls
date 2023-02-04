@@ -813,10 +813,12 @@ pub fn (mut an SemanticAnalyzer) array(node ast.Node) !&Symbol {
 
 	symbol_name := '[]' + an.formatter.format(expected_sym, child_types_format_cfg)
 	return an.context.find_symbol('', symbol_name) or {
+		file_path := os.join_path(an.context.file_dir, 'placeholder.vv')
+		file_id := an.context.store.get_file_id_for_path(file_path)
 		mut new_sym := Symbol{
 			name: symbol_name.clone()
 			is_top_level: true
-			file_path: os.join_path(an.context.file_dir, 'placeholder.vv')
+			file_id: file_id
 			file_version: 0
 			kind: .array_
 		}

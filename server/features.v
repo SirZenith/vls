@@ -60,7 +60,8 @@ pub fn (mut ls Vls) workspace_symbol(params lsp.WorkspaceSymbolParams, mut wr Re
 
 	for _, sym_arr in ls.store.symbols {
 		for sym in sym_arr {
-			uri := lsp.document_uri_from_path(sym.file_path)
+			file_path := ls.store.get_file_path_for_symbol(sym) or { continue }
+			uri := lsp.document_uri_from_path(file_path)
 			if uri in ls.files || uri.dir() == ls.root_uri {
 				sym_info := symbol_to_symbol_info(uri, sym) or { continue }
 				workspace_symbols << sym_info
@@ -68,8 +69,6 @@ pub fn (mut ls Vls) workspace_symbol(params lsp.WorkspaceSymbolParams, mut wr Re
 					child_sym_info := symbol_to_symbol_info(uri, child_sym) or { continue }
 					workspace_symbols << child_sym_info
 				}
-			} else {
-				// unsafe { uri.free() }
 			}
 		}
 	}
@@ -361,7 +360,8 @@ pub fn (mut ls Vls) definition(params lsp.TextDocumentPositionParams, mut wr Res
 		return none
 	}
 
-	loc_uri := lsp.document_uri_from_path(sym.file_path)
+	file_path := ls.store.get_file_path_for_symbol(sym)?
+	loc_uri := lsp.document_uri_from_path(file_path)
 	return [
 		lsp.LocationLink{
 			target_uri: loc_uri
@@ -372,7 +372,9 @@ pub fn (mut ls Vls) definition(params lsp.TextDocumentPositionParams, mut wr Res
 	]
 }
 
-fn get_implementation_locations_from_syms(symbols []&analyzer.Symbol, got_sym &analyzer.Symbol, original_range C.TSRange, mut locations []lsp.LocationLink) {
+fn get_implementation_locations_from_syms(store analyzer.Store, dir_path string, got_sym &analyzer.Symbol, original_range C.TSRange, mut locations []lsp.LocationLink) {
+	symbols := store.symbols[dir_path]
+
 	for sym in symbols {
 		mut interface_sym := unsafe { analyzer.void_sym }
 		mut sym_to_check := unsafe { analyzer.void_sym }
@@ -388,7 +390,7 @@ fn get_implementation_locations_from_syms(symbols []&analyzer.Symbol, got_sym &a
 
 		if analyzer.is_interface_satisfied(sym_to_check, interface_sym) {
 			locations << lsp.LocationLink{
-				target_uri: lsp.document_uri_from_path(sym.file_path)
+				target_uri: store.get_file_path_for_symbol(sym) or { '' }
 				target_range: tsrange_to_lsp_range(sym.range)
 				target_selection_range: tsrange_to_lsp_range(sym.range)
 				origin_selection_range: tsrange_to_lsp_range(original_range)
@@ -445,7 +447,7 @@ pub fn (mut ls Vls) implementation(params lsp.TextDocumentPositionParams, mut wr
 
 	// check first the possible interfaces implemented by the symbol
 	// at the current directory...
-	get_implementation_locations_from_syms(ls.store.symbols[file_dir], got_sym, original_range, mut
+	get_implementation_locations_from_syms(ls.store, file_dir, got_sym, original_range, mut
 		locations)
 
 	// ...afterwards to the imported modules
@@ -454,14 +456,14 @@ pub fn (mut ls Vls) implementation(params lsp.TextDocumentPositionParams, mut wr
 			continue
 		}
 
-		get_implementation_locations_from_syms(ls.store.symbols[imp.path], got_sym, original_range, mut
+		get_implementation_locations_from_syms(ls.store, imp.path, got_sym, original_range, mut
 			locations)
 	}
 
 	// ...and lastly from auto-imported modules such as "builtin"
 	$if !test {
 		for _, auto_import_path in ls.store.auto_imports {
-			get_implementation_locations_from_syms(ls.store.symbols[auto_import_path],
+			get_implementation_locations_from_syms(ls.store, auto_import_path,
 				got_sym, original_range, mut locations)
 		}
 	}

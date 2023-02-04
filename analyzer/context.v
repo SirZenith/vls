@@ -8,6 +8,7 @@ import tree_sitter { SourceText }
 pub struct AnalyzerContext {
 pub mut:
 	store        &Store     [required]
+	file_id      int        [required]
 	file_path    string     [required]
 	file_version int
 	file_name    string
@@ -17,6 +18,7 @@ pub mut:
 
 [params]
 pub struct AnalyzerContextParams {
+	file_id      int
 	file_path    string     [required]
 	file_version int
 	store        &Store     = &Store(0)
@@ -26,6 +28,7 @@ pub struct AnalyzerContextParams {
 pub fn new_context(params AnalyzerContextParams) AnalyzerContext {
 	return AnalyzerContext{
 		store: params.store
+		file_id: params.file_id
 		file_path: params.file_path
 		file_version: params.file_version
 		file_name: if params.file_path.len != 0 { os.base(params.file_path) } else { '' }

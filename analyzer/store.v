@@ -8,6 +8,9 @@ import ast
 pub struct Store {
 mut:
 	anon_fn_counter int = 1
+	// Array of full path of parsed file. Index of a file path in this array will
+	// be used as ID of that file during the life time of a store object.
+	file_paths []string
 pub mut:
 	// Default reporter to be used
 	// Used for diagnostics
@@ -49,8 +52,10 @@ pub mut:
 }
 
 pub fn (mut ss Store) with(params AnalyzerContextParams) AnalyzerContext {
+	file_id := ss.get_file_id_for_path(params.file_path)
 	return new_context(AnalyzerContextParams{
 		...params
+		file_id: file_id
 		store: unsafe { ss }
 	})
 }
@@ -64,8 +69,10 @@ pub fn (mut ss Store) report(report Report) {
 	ss.reporter.report(report)
 }
 
+[if trace ?]
 pub fn (mut ss Store) report_resolve(file_path string) {
-	ss.resolver.report(mut ss.reporter, file_path)
+	file_id := ss.get_file_id_for_path_opt(file_path) or { return }
+	ss.resolver.report(mut ss.reporter, file_id, file_path)
 }
 
 [if trace ?]
@@ -216,99 +223,175 @@ pub fn compare_params_and_ret_type(params []&Symbol, ret_type &Symbol, fn_to_com
 pub const container_symbol_kinds = [SymbolKind.chan_, .array_, .map_, .ref, .variadic, .optional,
 	.result, .multi_return]
 
+// get_file_id_for_path returns file id in current store for given path. If that
+// path is not already presented in store, it will be append to store's file list.
+pub fn (mut ss Store) get_file_id_for_path(path string) int {
+	mut index := ss.file_paths.index(path)
+	if index < 0 {
+		index = ss.file_paths.len
+		ss.file_paths << path
+	}
+
+	return index
+}
+
+// get_file_id_for_path_opt returns file id in current store for given path. Return
+// none when this path is not in store.
+pub fn (ss Store) get_file_id_for_path_opt(path string) ?int {
+	mut index := ss.file_paths.index(path)
+	return if index < 0 {
+		none
+	} else {
+		index
+	}
+}
+
+pub fn (ss Store) get_file_path_for_id(id int) ?string {
+	if id < 0 || id >= ss.file_paths.len {
+		return none
+	}
+
+	return ss.file_paths[id]
+}
+
+pub fn (ss Store) get_file_path_for_symbol(sym Symbol) ?string {
+	return ss.get_file_path_for_id(sym.file_id)
+}
+
+pub fn (ss Store) get_guid_for_symbol(sym Symbol) ?string {
+	file_path := ss.get_file_path_for_symbol(sym)?
+	// TODO: add support for struct, enum, interface member
+	return '${os.dir(file_path)}.${sym.name}'
+}
+
 // register_symbol registers the given symbol
 pub fn (mut ss Store) register_symbol(mut info Symbol) !&Symbol {
-	dir := os.dir(info.file_path)
-	// defer {
-	// 	unsafe { dir.free() }
-	// }
+	file_path := ss.get_file_path_for_symbol(info) or {
+		return error('invalid symbol file id: ${info.file_id}')
+	}
+	dir := os.dir(file_path)
+
 	mut existing_idx := ss.symbols[dir].index(info.name)
 	if existing_idx == -1 && info.kind != .placeholder
 		&& info.kind !in analyzer.container_symbol_kinds {
 		// find by row
-		existing_idx = ss.symbols[dir].index_by_row(info.file_path, info.range.start_point.row)
+		existing_idx = ss.symbols[dir].index_by_row(info.file_id, info.range.start_point.row)
 	}
 
-	// Replace symbol if symbol already exists
-	// the info.kind condition is used for typedefs with anon fn types
-	if existing_idx != -1
-		&& (info.kind != .typedef && ss.symbols[dir][existing_idx].kind != .function_type) {
-		mut existing_sym := ss.symbols[dir][existing_idx]
-		if existing_sym.file_version == info.file_version && existing_sym.name == info.name
-			&& existing_sym.range.eq(info.range) && existing_sym.kind == info.kind {
-			return existing_sym
-		}
+	sym := if existing_idx != -1 && info.kind != .typedef && ss.symbols[dir][existing_idx].kind != .function_type {
+		ss.update_symbol(dir, existing_idx, info)!
+	} else {
+		ss.symbols[dir] << info
 
-		// Remove this?
-		if existing_sym.kind !in analyzer.container_symbol_kinds {
-			if existing_sym.kind != .placeholder
-				&& (info.range.start_point.row > existing_sym.range.start_point.row
-				|| (existing_sym.kind == info.kind && (existing_sym.file_path == info.file_path
-				&& existing_sym.file_version >= info.file_version))) {
-				return report_error('Symbol already exists. (idx=${existing_idx}) (name="${existing_sym.name}")',
-					info.range)
+		if info.language != .v {
+			ss.binded_symbol_locations << BindedSymbolLocation{
+				for_sym_name: info.name
+				language: info.language
+				module_path: ss.get_file_path_for_id(info.file_id) or { '' }
 			}
-
-			if existing_sym.name != info.name {
-				// unsafe { existing_sym.name.free() }
-				existing_sym.name = info.name
-			}
-
-			existing_sym.children_syms = info.children_syms
-			existing_sym.parent_sym = info.parent_sym
-			existing_sym.return_sym = info.return_sym
-			existing_sym.language = info.language
-			existing_sym.access = info.access
-			existing_sym.kind = info.kind
-			existing_sym.range = info.range
-			existing_sym.generic_placeholder_len = info.generic_placeholder_len
-			existing_sym.file_path = info.file_path
-			existing_sym.file_version = info.file_version
-			existing_sym.scope = info.scope
 		}
 
-		return existing_sym
+		ss.symbols[dir].last()
 	}
 
-	ss.symbols[dir] << info
-	if info.language != .v {
-		ss.binded_symbol_locations << BindedSymbolLocation{
-			for_sym_name: info.name
-			language: info.language
-			module_path: os.dir(info.file_path)
-		}
+	if ident := ss.get_guid_for_symbol(sym) {
+		ss.trace_report(
+			kind: .notice
+			message: 'resolving references to ${sym.name}'
+			range: sym.range
+		)
+		ss.resolver.resolve_with(ident, *sym)
+	}
+	
+
+	return sym
+}
+
+pub fn (mut ss Store) update_symbol(dir string, index int, new_sym Symbol) !&Symbol {
+	len := ss.symbols[dir].len
+	if index < 0 || index >= len {
+		return error('symbol index out of range: ${index} (max ${len})')
 	}
 
-	return unsafe { info }
+	mut sym := ss.symbols[dir][index]
+
+	same_file := sym.file_id == new_sym.file_id
+	same_kind := sym.kind == new_sym.kind
+	if same_file
+		&& sym.file_version == new_sym.file_version
+		&& sym.name == new_sym.name
+		&& sym.range.eq(new_sym.range)
+		&& same_kind {
+		// no information update needed.
+		return sym
+	}
+
+	// Remove this?
+	/* if sym.kind in analyzer.container_symbol_kinds {
+		return sym
+	} */
+
+	defined_latter := new_sym.range.start_point.row > sym.range.start_point.row
+	not_symbol_update  := same_kind && same_file && sym.file_version >= new_sym.file_version
+	canot_override := defined_latter || not_symbol_update
+
+	if sym.kind != .placeholder && canot_override {
+		return report_error('Symbol already exists. (idx=${index}) (name="${sym.name}")', new_sym.range)
+	}
+
+	if sym.name != new_sym.name {
+		sym.name = new_sym.name
+	}
+
+	/*
+	sym.children_syms = new_sym.children_syms
+	sym.parent_sym = new_sym.parent_sym
+	sym.return_sym = new_sym.return_sym
+	sym.language = new_sym.language
+	sym.access = new_sym.access
+	sym.kind = new_sym.kind
+	sym.range = new_sym.range
+	sym.generic_placeholder_len = new_sym.generic_placeholder_len
+	sym.file_id = new_sym.file_id
+	sym.file_path = new_sym.file_path
+	sym.file_version = new_sym.file_version
+	sym.scope = new_sym.scope
+	*/
+	unsafe { *sym = new_sym }
+
+	return sym
 }
 
 // get_symbols_by_file_path retrieves the symbols based on the given file path
 pub fn (ss &Store) get_symbols_by_file_path(file_path string) []&Symbol {
+	file_id := ss.get_file_id_for_path_opt(file_path) or {
+		return []
+	}
 	dir := os.dir(file_path)
-	// defer {
-	// 	unsafe { dir.free() }
-	// }
-
-	if dir in ss.symbols {
-		return ss.symbols[dir].filter_by_file_path(file_path)
+	if dir !in ss.symbols {
+		return []
 	}
 
-	return []
+	return ss.symbols[dir].filter_by_file_id(file_id)
 }
 
 // has_file_path checks if the data of a specific file_path already exists
 pub fn (ss &Store) has_file_path(file_path string) bool {
+	file_id := ss.get_file_id_for_path_opt(file_path) or {
+		return false
+	}
+
 	dir := os.dir(file_path)
-	// defer {
-	// 	unsafe { dir.free() }
-	// }
-	if dir in ss.symbols {
-		for _, mut sym in ss.symbols[dir] {
-			if sym.file_path == file_path {
-				return true
-			}
+	if dir !in ss.symbols {
+		return false
+	}
+
+	for sym in ss.symbols[dir] {
+		if sym.file_id == file_id {
+			return true
 		}
 	}
+
 	return false
 }
 
@@ -516,7 +599,13 @@ pub fn (mut store Store) find_symbol_by_type_node(file_path string, node ast.Nod
 	if sym_kind == .function_type {
 		mut parameters := []&Symbol{}
 		if param_node := node.child_by_field_name('parameters') {
-			mut ctx := new_context(store: store, file_path: file_path, text: src_text)
+			file_id := store.get_file_id_for_path(file_path)
+			mut ctx := new_context(
+				store: store,
+				file_id: file_id,
+				file_path: file_path,
+				text: src_text
+			)
 			parameters << extract_parameter_list(mut ctx, param_node)
 		}
 
@@ -528,9 +617,10 @@ pub fn (mut store Store) find_symbol_by_type_node(file_path string, node ast.Nod
 		}
 
 		return store.find_fn_symbol(file_path, module_name, return_sym, parameters) or {
+			file_id := store.get_file_id_for_path(file_path)
 			mut new_sym := &Symbol{
 				name: analyzer.anon_fn_prefix + store.anon_fn_counter.str()
-				file_path: file_path
+				file_id: file_id
 				file_version: store.cur_version
 				is_top_level: true
 				kind: sym_kind
@@ -547,10 +637,12 @@ pub fn (mut store Store) find_symbol_by_type_node(file_path string, node ast.Nod
 	}
 
 	return store.find_symbol(file_path, module_name, symbol_name) or {
+		placehoder_file_path := os.join_path(store.get_module_path(file_path, module_name), 'placeholder.vv')
+		file_id := store.get_file_id_for_path(placehoder_file_path)
 		mut new_sym := Symbol{
 			name: symbol_name
 			is_top_level: true
-			file_path: os.join_path(store.get_module_path(file_path, module_name), 'placeholder.vv')
+			file_id: file_id
 			file_version: 0
 			kind: sym_kind
 		}
@@ -885,10 +977,12 @@ pub fn (mut ss Store) infer_value_type_from_node(file_path string, node ast.Node
 					src_text)
 				type_name = '[]' + inferred_value_sym.name
 				return ss.find_symbol(file_path, '', type_name) or {
+					placehoder_file_path := os.join_path(ss.get_module_path(file_path, ''), 'placeholder.vv')
+					file_id := ss.get_file_id_for_path(placehoder_file_path)
 					mut new_array_sym := &Symbol{
 						name: type_name
 						is_top_level: true
-						file_path: os.join_path(ss.get_module_path(file_path, ''), 'placeholder.vv')
+						file_id: file_id
 						file_version: 0
 						kind: .array_
 						children_syms: [inferred_value_sym]
@@ -1056,6 +1150,7 @@ pub fn (mut ss Store) delete_symbol_at_node(file_path string, root_node ast.Node
 	mut cursor := new_tree_cursor(root_node, start_line_nr: start_line)
 
 	dir := os.dir(file_path)
+	file_id := ss.get_file_id_for_path(file_path)
 
 	for node in cursor {
 		if !within_range(node.range(), start_line, end_line) {
@@ -1066,7 +1161,7 @@ pub fn (mut ss Store) delete_symbol_at_node(file_path string, root_node ast.Node
 			.const_spec, .global_var_spec, .global_var_declaration, .function_declaration,
 			.interface_declaration, .enum_declaration, .type_declaration, .struct_declaration {
 				name_node := node.child_by_field_name('name') or { continue }
-				idx := ss.symbols[dir].index_by_row(file_path, node.start_point().row)
+				idx := ss.symbols[dir].index_by_row(file_id, node.start_point().row)
 				if idx != -1 && idx < ss.symbols[dir].len {
 					language := ss.symbols[dir][idx].language
 					if language != .v {
@@ -1089,7 +1184,7 @@ pub fn (mut ss Store) delete_symbol_at_node(file_path string, root_node ast.Node
 					// delete the method if and only if method is not void (nor null)
 					if !fn_sym.is_void() && !fn_sym.parent_sym.is_void() {
 						mut parent_sym := unsafe { fn_sym.parent_sym }
-						child_idx := parent_sym.children_syms.index_by_row(file_path,
+						child_idx := parent_sym.children_syms.index_by_row(file_id,
 							node.start_point().row)
 						if child_idx != -1 {
 							parent_sym.children_syms.delete(child_idx)

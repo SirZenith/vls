@@ -40,7 +40,11 @@ pub fn (mut fmt SymbolFormatter) format(sym &Symbol, cfg SymbolFormatterConfig) 
 	return sb.str()
 }
 
-fn (fmt &SymbolFormatter) get_module_name(from_file_path string) string {
+fn (fmt &SymbolFormatter) get_module_name(file_id int) string {
+	from_file_path := fmt.context.store.get_file_path_for_id(file_id) or {
+		return ''
+	}
+
 	if from_file_path.len != 0 {
 		if import_lists := fmt.context.store.imports[fmt.context.file_dir] {
 			for imp in import_lists {
@@ -79,7 +83,7 @@ fn (mut fmt SymbolFormatter) write_name(sym &Symbol, mut builder strings.Builder
 	// 	builder.write_string('JS.')
 	// } else {
 	if sym.language == .v {
-		module_name := fmt.get_module_name(sym.file_path)
+		module_name := fmt.get_module_name(sym.file_id)
 		if module_name.len != 0 {
 			builder.write_string(module_name + '.')
 		}
@@ -451,7 +455,8 @@ pub fn (mut fmt SymbolFormatter) format_fields(sym &Symbol, cfg SymbolFormatterC
 
 	mut is_dirty := false
 	for field in field_syms {
-		if os.dir(field.file_path) != fmt.context.file_dir
+		file_path := fmt.context.store.get_file_path_for_id(field.file_id) or { '' }
+		if os.dir(file_path) != fmt.context.file_dir
 			&& int(field.access) < int(SymbolAccess.public) {
 			continue
 		} else if is_dirty {
@@ -480,7 +485,8 @@ pub fn (mut fmt SymbolFormatter) format_methods(sym &Symbol, cfg SymbolFormatter
 
 	mut is_dirty := false
 	for method in method_syms {
-		if os.dir(method.file_path) != fmt.context.file_dir
+		file_path := fmt.context.store.get_file_path_for_id(method.file_id) or { '' }
+		if os.dir(file_path) != fmt.context.file_dir
 			&& int(method.access) < int(SymbolAccess.public) {
 			continue
 		} else if is_dirty {

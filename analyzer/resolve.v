@@ -1,7 +1,5 @@
 module analyzer
 
-import os
-
 enum ResolveBranchType {
 	@none
 	if_expr
@@ -90,7 +88,11 @@ pub fn (mut r Resolver) register(mod_path string, dependency_name string, info R
 }
 
 // resolve_with resolves all symbols in channel of `depended`
-pub fn (mut r Resolver) resolve_with(depended &Symbol) {
+pub fn (mut r Resolver) resolve_with(ident string, depended &Symbol) {
+	if ident !in r.resolve_center {
+		return
+	}
+
 	got_sym := if depended.is_returnable() {
 		depended.return_sym
 	} else {
@@ -98,12 +100,6 @@ pub fn (mut r Resolver) resolve_with(depended &Symbol) {
 	}
 	if got_sym.is_void()
 		|| got_sym.kind == .never {
-		return
-	}
-
-	mod_path := os.dir(depended.file_path)
-	ident := r.get_symbol_identifier(mod_path, depended.name)
-	if ident !in r.resolve_center {
 		return
 	}
 
@@ -131,10 +127,10 @@ pub fn (mut r Resolver) recover(file_path string, dependency_name string) {
 	}
 }
 
-pub fn (r Resolver) report(mut reporter Reporter, file_path string) {
+pub fn (r Resolver) report(mut reporter Reporter, file_id int, report_file_path string) {
 	for _, channel in r.resolve_center {
 		for info in channel {
-			if info.sym.file_path != file_path {
+			if info.sym.file_id != file_id {
 				continue
 			}
 
@@ -142,13 +138,13 @@ pub fn (r Resolver) report(mut reporter Reporter, file_path string) {
 				reporter.report(
 					message: info.err_msg
 					range: info.sym.range
-					file_path: info.sym.file_path
+					file_path: report_file_path
 				)
 			} else if info.sym.return_sym.is_void() {
 				reporter.report(
 					message: 'unresolved symbol ${info.sym.name}'
 					range: info.sym.range
-					file_path: info.sym.file_path
+					file_path: report_file_path
 				)
 			}
 		}

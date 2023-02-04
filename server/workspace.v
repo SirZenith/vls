@@ -39,9 +39,10 @@ pub fn (mut ls Vls) did_change_watched_files(params lsp.DidChangeWatchedFilesPar
 					}
 
 					// update existing symbols
+					file_id := ls.store.get_file_id_for_path(new_uri_path)
 					mut symbols := ls.store.get_symbols_by_file_path(prev_uri_path)
 					for mut sym in symbols {
-						sym.file_path = new_uri_path
+						sym.file_id = file_id
 					}
 
 					// update existing imports
@@ -82,6 +83,7 @@ pub fn (mut ls Vls) did_change_watched_files(params lsp.DidChangeWatchedFilesPar
 
 				// TODO: use did_close(?)
 				file_path := change_uri.path()
+				file_id := ls.store.get_file_id_for_path(file_path)
 
 				ls.files.delete(change_uri)
 				ls.store.opened_scopes.delete(file_path)
@@ -93,7 +95,7 @@ pub fn (mut ls Vls) did_change_watched_files(params lsp.DidChangeWatchedFilesPar
 					file_dir := change_uri.dir_path()
 					for j := 0; j < ls.store.symbols[file_dir].len; {
 						sym := ls.store.symbols[file_dir][j]
-						if sym.file_path == file_path {
+						if sym.file_id == file_id {
 							ls.store.symbols[file_dir].delete(j)
 						} else {
 							j++

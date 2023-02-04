@@ -294,7 +294,8 @@ fn (mut builder CompletionBuilder) build_suggestions_from_sym(sym &analyzer.Symb
 				continue
 			}
 
-			if os.dir(child_sym.file_path) != builder.cur_dir()
+			file_path := builder.store.get_file_path_for_symbol(child_sym) or { '' }
+			if os.dir(file_path) != builder.cur_dir()
 				&& int(child_sym.access) < int(analyzer.SymbolAccess.public) {
 				continue
 			}

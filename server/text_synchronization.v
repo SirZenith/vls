@@ -13,7 +13,11 @@ fn (mut ls Vls) analyze_file(file File, affected_node_type v.NodeType, affected_
 
 	is_import := affected_node_type == .import_declaration
 	file_path := file.uri.path()
-	context := ls.store.with(file_path: file_path, file_version: file.version, text: file.source)
+	context := ls.store.with(
+		file_path: file_path,
+		file_version: file.version,
+		text: file.source
+	)
 
 	// skip analyzing imports when affected is not an import declaration
 	if is_import || affected_line == 0 {

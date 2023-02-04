@@ -119,7 +119,7 @@ pub fn (sa SymbolAccess) str() string {
 pub const void_sym = &Symbol{
 	name: 'void'
 	kind: .void
-	file_path: ''
+	file_id: -1
 	file_version: 0
 	is_top_level: true
 }
@@ -128,6 +128,7 @@ pub const void_sym_arr = [void_sym]
 
 [heap]
 pub struct Symbol {
+// All field are pub mut to allow inplace info update for a referenced symbol.
 pub mut:
 	name                    string
 	kind                    SymbolKind   // see SymbolKind
@@ -141,7 +142,7 @@ pub mut:
 	generic_placeholder_len int
 	interface_children_len  int
 	children_syms           []&Symbol // methods, sum types, map types, optionals, struct fields, etc.
-	file_path               string         [required] // required in order to register the symbol at its appropriate directory.
+	file_id                 int            [required] // id of file that this symbol belons to
 	file_version            int            [required] // file version when the symbol was registered
 	scope                   &ScopeTree = &ScopeTree(0)
 	docstrings              []string
@@ -223,9 +224,9 @@ pub fn (infos []&Symbol) index(name string) int {
 }
 
 // index_by_row returns the index based on the given file path and row
-pub fn (infos []&Symbol) index_by_row(file_path string, row u32) int {
+pub fn (infos []&Symbol) index_by_row(file_id int, row u32) int {
 	for i, v in infos {
-		if v.file_path == file_path && v.range.start_point.row == row {
+		if v.file_id == file_id && v.range.start_point.row == row {
 			return i
 		}
 	}
@@ -233,16 +234,16 @@ pub fn (infos []&Symbol) index_by_row(file_path string, row u32) int {
 	return -1
 }
 
-pub fn (symbols []&Symbol) filter_by_file_path(file_path string) []&Symbol {
+pub fn (symbols []&Symbol) filter_by_file_id(file_id int) []&Symbol {
 	mut filtered := []&Symbol{}
 	for sym in symbols {
-		if sym.file_path == file_path {
+		if sym.file_id == file_id {
 			filtered << sym
 		}
 
 		filtered_from_children := sym.children_syms
 			.filter(!symbols.exists(it.name))
-			.filter_by_file_path(file_path)
+			.filter_by_file_id(file_id)
 		for child_sym in filtered_from_children {
 			if filtered.exists(child_sym.name) {
 				continue

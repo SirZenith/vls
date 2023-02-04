@@ -36,13 +36,13 @@ fn register_none(mut ss Store, builtin_import &Import) {
 		parent_sym: &Symbol{
 			name: '&' + registered_none_sym.name
 			is_top_level: true
-			file_path: registered_none_sym.file_path
+			file_id: registered_none_sym.file_id
 			parent_sym: registered_none_sym
 			kind: .ref
 			file_version: 0
 		}
 		is_top_level: true
-		file_path: registered_none_sym.file_path
+		file_id: registered_none_sym.file_id
 		file_version: 0
 	}
 
@@ -93,7 +93,7 @@ fn register_builtin_symbols(mut ss Store, builtin_import &Import) {
 			kind: .placeholder
 			access: .public
 			is_top_level: true
-			file_path: placeholder_file_path
+			file_id: ss.get_file_id_for_path(placeholder_file_path)
 			file_version: if type_name in should_be_placeholders { -1 } else { 0 }
 		}
 
@@ -108,13 +108,15 @@ fn register_builtin_symbols(mut ss Store, builtin_import &Import) {
 
 		if type_name == 'string' {
 			// register []string
+			file_path := os.join_path(builtin_path, 'array.vv')
+			file_id := ss.get_file_id_for_path(file_path)
 			mut array_sym := Symbol{
 				name: '[]' + type_name
 				kind: .array_
 				access: .public
 				is_top_level: true
 				children_syms: [returned_sym]
-				file_path: os.join_path(builtin_path, 'array.vv')
+				file_id: file_id
 				file_version: 0
 			}
 
