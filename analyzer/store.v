@@ -5,12 +5,16 @@ import structures.depgraph
 import tree_sitter
 import ast
 
+const anon_fn_prefix = '#anon_'
+
 pub struct Store {
 mut:
 	anon_fn_counter int = 1
 	// Array of full path of parsed file. Index of a file path in this array will
 	// be used as ID of that file during the life time of a store object.
 	file_paths []string
+	symbol_mgr SymbolManager
+	scope_mgr ScopeManager
 pub mut:
 	// Default reporter to be used
 	// Used for diagnostics
@@ -32,12 +36,9 @@ pub mut:
 	// as basis for removing symbols/scopes/imports
 	// tree goes: tree[<full dir path>][]<full dir path>
 	dependency_tree depgraph.Tree
-	// Symbol table
-	// map goes: map[<full dir path>]map[]&Symbol
-	symbols map[string][]&Symbol
 	// Scope data for different opened files
-	// map goes: map[<full file path>]&ScopeTree
-	opened_scopes map[string]&ScopeTree
+	// map goes: map[<full file path>]<scope id>
+	opened_scopes map[string]ScopeID
 	// paths to be imported aside from the ones
 	// specified from lookup paths specified from
 	// import_modules_from_tree
@@ -80,8 +81,52 @@ pub fn (mut ss Store) trace_report(report Report) {
 	ss.reporter.report(report)
 }
 
-// get_module_path_opt is a variant of `get_module_path` that returns
-// an optional if not found
+// -----------------------------------------------------------------------------
+// File paths management
+
+// get_file_id_for_path returns file id in current store for given path. If that
+// path is not already presented in store, it will be append to store's file list.
+pub fn (mut ss Store) get_file_id_for_path(path string) int {
+	mut index := ss.file_paths.index(path)
+	if index < 0 {
+		index = ss.file_paths.len
+		ss.file_paths << path
+	}
+
+	return index
+}
+
+// get_file_id_for_path_opt returns file id in current store for given path. Return
+// none when this path is not in store.
+pub fn (ss Store) get_file_id_for_path_opt(path string) ?int {
+	mut index := ss.file_paths.index(path)
+	return if index < 0 {
+		none
+	} else {
+		index
+	}
+}
+
+// get_file_path_for_id returns file path corresponding to given id. `none` will
+// be returned when no file path found.
+pub fn (ss Store) get_file_path_for_id(id int) ?string {
+	if id < 0 || id >= ss.file_paths.len {
+		return none
+	}
+
+	return ss.file_paths[id]
+}
+
+// get_file_path_for_symbol returns path of file in which this symbol is defined.
+// When no such file is found, `none` will be returned.
+pub fn (ss Store) get_file_path_for_symbol(sym Symbol) ?string {
+	return ss.get_file_path_for_id(sym.file_id)
+}
+
+// -----------------------------------------------------------------------------
+
+// get_module_path returns module path corresponding to name `module_name` in
+// given file. If nothing is found, return `none`.
 pub fn (ss &Store) get_module_path_opt(file_path string, module_name string) ?string {
 	file_name := os.base(file_path)
 	file_dir := os.dir(file_path)
@@ -114,9 +159,8 @@ pub fn (ss &Store) get_module_path_from_sym(file_path string, symbol_name string
 	return none
 }
 
-// get_module_path returns the path of the import/module based
-// on the given module name. If nothing found, it will return
-// the current directory instead.
+// get_module_path returns module path corresponding to name `module_name` in
+// given file. If nothing is found, it will return directory path of that file.
 pub fn (ss &Store) get_module_path(file_path string, module_name string) string {
 	// empty names should return the current selected dir instead
 	return ss.get_module_path_opt(file_path, module_name) or { os.dir(file_path) }
@@ -159,8 +203,6 @@ pub fn (ss &Store) find_symbol(file_path string, module_name string, name string
 
 	return error('Symbol `${name}` not found.')
 }
-
-const anon_fn_prefix = '#anon_'
 
 // find_fn_symbol finds the function symbol with the appropriate parameters and return type
 pub fn (ss &Store) find_fn_symbol(file_path string, module_name string, return_sym &Symbol, params []&Symbol) ?&Symbol {
@@ -223,156 +265,26 @@ pub fn compare_params_and_ret_type(params []&Symbol, ret_type &Symbol, fn_to_com
 pub const container_symbol_kinds = [SymbolKind.chan_, .array_, .map_, .ref, .variadic, .optional,
 	.result, .multi_return]
 
-// get_file_id_for_path returns file id in current store for given path. If that
-// path is not already presented in store, it will be append to store's file list.
-pub fn (mut ss Store) get_file_id_for_path(path string) int {
-	mut index := ss.file_paths.index(path)
-	if index < 0 {
-		index = ss.file_paths.len
-		ss.file_paths << path
-	}
+// -----------------------------------------------------------------------------
+// Symbol management
 
-	return index
+// get_ident_for_symbol returns a string identifier for symbol.
+pub fn (ss Store) get_ident_of_symbol(sym Symbol) ?string {
+	return ss.symbol_mgr.get_ident(ss, sym)
 }
 
-// get_file_id_for_path_opt returns file id in current store for given path. Return
-// none when this path is not in store.
-pub fn (ss Store) get_file_id_for_path_opt(path string) ?int {
-	mut index := ss.file_paths.index(path)
-	return if index < 0 {
-		none
-	} else {
-		index
-	}
+pub fn (ss Store) get_ident_of_symbol_id(id SymbolID) ?string {
+	return ss.symbol_mgr.get_ident_of_id(ss, id)
 }
 
-pub fn (ss Store) get_file_path_for_id(id int) ?string {
-	if id < 0 || id >= ss.file_paths.len {
-		return none
-	}
-
-	return ss.file_paths[id]
-}
-
-pub fn (ss Store) get_file_path_for_symbol(sym Symbol) ?string {
-	return ss.get_file_path_for_id(sym.file_id)
-}
-
-pub fn (ss Store) get_guid_for_symbol(sym Symbol) ?string {
-	file_path := ss.get_file_path_for_symbol(sym)?
-	// TODO: add support for struct, enum, interface member
-	return '${os.dir(file_path)}.${sym.name}'
-}
-
-// register_symbol registers the given symbol
-pub fn (mut ss Store) register_symbol(mut info Symbol) !&Symbol {
-	file_path := ss.get_file_path_for_symbol(info) or {
-		return error('invalid symbol file id: ${info.file_id}')
-	}
-	dir := os.dir(file_path)
-
-	mut existing_idx := ss.symbols[dir].index(info.name)
-	if existing_idx == -1 && info.kind != .placeholder
-		&& info.kind !in analyzer.container_symbol_kinds {
-		// find by row
-		existing_idx = ss.symbols[dir].index_by_row(info.file_id, info.range.start_point.row)
-	}
-
-	sym := if existing_idx != -1 && info.kind != .typedef && ss.symbols[dir][existing_idx].kind != .function_type {
-		ss.update_symbol(dir, existing_idx, info)!
-	} else {
-		ss.symbols[dir] << info
-
-		if info.language != .v {
-			ss.binded_symbol_locations << BindedSymbolLocation{
-				for_sym_name: info.name
-				language: info.language
-				module_path: ss.get_file_path_for_id(info.file_id) or { '' }
-			}
-		}
-
-		ss.symbols[dir].last()
-	}
-
-	if ident := ss.get_guid_for_symbol(sym) {
-		ss.trace_report(
-			kind: .notice
-			message: 'resolving references to ${sym.name}'
-			range: sym.range
-		)
-		ss.resolver.resolve_with(ident, *sym)
-	}
-	
-
-	return sym
-}
-
-pub fn (mut ss Store) update_symbol(dir string, index int, new_sym Symbol) !&Symbol {
-	len := ss.symbols[dir].len
-	if index < 0 || index >= len {
-		return error('symbol index out of range: ${index} (max ${len})')
-	}
-
-	mut sym := ss.symbols[dir][index]
-
-	same_file := sym.file_id == new_sym.file_id
-	same_kind := sym.kind == new_sym.kind
-	if same_file
-		&& sym.file_version == new_sym.file_version
-		&& sym.name == new_sym.name
-		&& sym.range.eq(new_sym.range)
-		&& same_kind {
-		// no information update needed.
-		return sym
-	}
-
-	// Remove this?
-	/* if sym.kind in analyzer.container_symbol_kinds {
-		return sym
-	} */
-
-	defined_latter := new_sym.range.start_point.row > sym.range.start_point.row
-	not_symbol_update  := same_kind && same_file && sym.file_version >= new_sym.file_version
-	canot_override := defined_latter || not_symbol_update
-
-	if sym.kind != .placeholder && canot_override {
-		return report_error('Symbol already exists. (idx=${index}) (name="${sym.name}")', new_sym.range)
-	}
-
-	if sym.name != new_sym.name {
-		sym.name = new_sym.name
-	}
-
-	/*
-	sym.children_syms = new_sym.children_syms
-	sym.parent_sym = new_sym.parent_sym
-	sym.return_sym = new_sym.return_sym
-	sym.language = new_sym.language
-	sym.access = new_sym.access
-	sym.kind = new_sym.kind
-	sym.range = new_sym.range
-	sym.generic_placeholder_len = new_sym.generic_placeholder_len
-	sym.file_id = new_sym.file_id
-	sym.file_path = new_sym.file_path
-	sym.file_version = new_sym.file_version
-	sym.scope = new_sym.scope
-	*/
-	unsafe { *sym = new_sym }
-
-	return sym
-}
-
-// get_symbols_by_file_path retrieves the symbols based on the given file path
-pub fn (ss &Store) get_symbols_by_file_path(file_path string) []&Symbol {
+// get_symbols_by_file_path retrieves all symbols defined in given file.
+pub fn (ss &Store) get_symbols_by_file_path(file_path string) []SymbolID {
 	file_id := ss.get_file_id_for_path_opt(file_path) or {
 		return []
 	}
 	dir := os.dir(file_path)
-	if dir !in ss.symbols {
-		return []
-	}
 
-	return ss.symbols[dir].filter_by_file_id(file_id)
+	return ss.symbol_mgr.get_symbols_by_path(dir, file_id)
 }
 
 // has_file_path checks if the data of a specific file_path already exists
@@ -380,19 +292,9 @@ pub fn (ss &Store) has_file_path(file_path string) bool {
 	file_id := ss.get_file_id_for_path_opt(file_path) or {
 		return false
 	}
-
 	dir := os.dir(file_path)
-	if dir !in ss.symbols {
-		return false
-	}
 
-	for sym in ss.symbols[dir] {
-		if sym.file_id == file_id {
-			return true
-		}
-	}
-
-	return false
+	return ss.symbol_mgr.has_file_id(dir, file_id)
 }
 
 // delete removes the given path of a workspace/project if possible.
@@ -427,44 +329,65 @@ pub fn (mut ss Store) delete(dir string, excluded_dir ...string) {
 
 	// delete all imports from unused dir
 	if !is_used {
-		unsafe {
-			// delete symbols and imports
-			// for _, sym in ss.symbols[dir] {
-			// 	sym.free()
-			// }
-
-			// ss.symbols[dir].free()
-		}
-		ss.symbols.delete(dir)
+		ss.symbol_mgr.delete_module(dir)
 		for i := 0; ss.imports[dir].len != 0; {
-			// unsafe { ss.imports[dir][i].free() }
 			ss.imports[dir].delete(i)
 		}
 	}
 }
+// -----------------------------------------------------------------------------
 
-// get_scope_from_node returns a scope based on the given node
-pub fn (mut ss Store) get_scope_from_node(file_path string, node ast.Node) !&ScopeTree {
-	if node.is_null() {
-		return error('unable to create scope')
+// register_symbol registers or updates a symbol with given info, and returns
+// ID of changed symbol.
+pub fn (mut ss Store) register_symbol(info Symbol) !SymbolID {
+	file_path := ss.get_file_path_for_symbol(info) or {
+		return error('invalid symbol file id: ${info.file_id}')
+	}
+	dir := os.dir(file_path)
+
+	mut existing_idx := ss.symbols[dir].index(info.name)
+	if existing_idx == -1 && info.kind != .placeholder
+		&& info.kind !in analyzer.container_symbol_kinds {
+		// find by row, in case this is a reanme operation of existing symbol
+		existing_idx = ss.symbols[dir].index_by_row(info.file_id, info.range.start_point.row)
 	}
 
-	if node.type_name == .source_file {
-		if file_path !in ss.opened_scopes {
-			ss.opened_scopes[file_path] = &ScopeTree{
-				start_byte: node.start_byte()
-				end_byte: node.end_byte()
-			}
-		}
-
-		return unsafe { ss.opened_scopes[file_path] }
+	id := if existing_idx != -1 && info.kind != .typedef && ss.symbols[dir][existing_idx].kind != .function_type {
+		old_id := ss.symbols[dir][existing_idx]
+		ss.update_existing_symbol(old_id, info)!
 	} else {
-		return unsafe {
-			ss.opened_scopes[file_path].new_child(node.start_byte(), node.end_byte()) or {
-				error('')
+		new_id := ss.create_new_symbol_with(info)
+		ss.symbols[dir] << new_id
+
+		if info.language != .v {
+			ss.binded_symbol_locations << BindedSymbolLocation{
+				for_sym_name: info.name
+				language: info.language
+				module_path: ss.get_file_path_for_id(info.file_id) or { '' }
 			}
 		}
+
+		new_id
 	}
+
+	if ident := ss.get_ident_of_symbol_id(id) {
+		sym := ss.get_symbol_info(id)
+		ss.trace_report(
+			kind: .notice
+			message: 'resolving references to ${sym.name}'
+			range: sym.range
+		)
+		ss.resolver.resolve_with(ident, sym)
+	}
+
+	return id
+}
+
+// -----------------------------------------------------------------------------
+
+// get_scope_from_node is a wrapper around ScopeManager.get_scope_from_node.
+pub fn (mut ss Store) get_scope_from_node(file_path string, node ast.Node) !ScopeID {
+	return ss.scope_mgr.get_scope_from_node(file_path, none)
 }
 
 // symbol_name_from_node extracts the symbol's kind, name, and module name from the given node

@@ -26,13 +26,13 @@ mut:
 	first_var_decl_pos C.TSRange
 }
 
-fn (mut sr SymbolAnalyzer) new_top_level_symbol(identifier_node ast.Node, access SymbolAccess, kind SymbolKind) !&Symbol {
+fn (mut sr SymbolAnalyzer) new_top_level_symbol(identifier_node ast.Node, access SymbolAccess, kind SymbolKind) !Symbol {
 	id_node_type_name := identifier_node.type_name
 	if id_node_type_name == .qualified_type {
-		return report_error('Invalid top-level node type `${id_node_type_name}`', identifier_node.range())
+		return report_error('invalid top-level node type `${id_node_type_name}`', identifier_node.range())
 	}
 
-	mut symbol := &Symbol{
+	mut symbol := Symbol{
 		access: access
 		kind: kind
 		is_top_level: true
@@ -573,6 +573,9 @@ fn (mut sr SymbolAnalyzer) top_level_decl(current_node ast.Node) ![]&Symbol {
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Expression
+
 fn (mut sr SymbolAnalyzer) short_var_decl(var_decl ast.Node) ![]&Symbol {
 	left_expr_lists := var_decl.child_by_field_name('left') or {
 		return report_error('left hand side not found', var_decl.range())
@@ -630,11 +633,6 @@ fn (mut sr SymbolAnalyzer) register_variable(sym &Symbol, left_expr_lists ast.No
 	}
 
 	name := left.text(sr.context.text)
-	/*
-	if sym.is_void() {
-		return report_error('invalid type for identifier `${name}`', left_expr_lists.range())
-	}
-	*/
 
 	return &Symbol{
 		name: name
@@ -1143,6 +1141,8 @@ fn extract_parameter_list(mut ctx AnalyzerContext, node ast.Node) []&Symbol {
 	return syms
 }
 
+// -----------------------------------------------------------------------------
+
 // analyze scans and returns a list of symbols and messages (errors/warnings)
 pub fn (mut sr SymbolAnalyzer) analyze(node ast.Node) ![]&Symbol {
 	match node.type_name.group() {
@@ -1173,20 +1173,20 @@ pub fn (mut sr SymbolAnalyzer) analyze_from_cursor(mut cursor TreeCursor) []&Sym
 	mut global_scope := unsafe { sr.context.store.opened_scopes[sr.context.file_path] }
 	mut symbols := []&Symbol{cap: 255}
 	for got_node in cursor {
-		// Reminder: without calling child method on `got_node`, cursor only 
+		// Reminder: without calling `child` method on `got_node`, cursor only
 		// iterates on top level declarations.
 		// As a result, only top level symbols are handled here in this loop.
 		mut syms := sr.analyze(got_node) or {
 			sr.trace_report_error(err)
 			continue
 		}
-		for i, mut sym in syms {
+		for i, sym in syms {
 			if sym.kind == .function && !sym.parent_sym.is_void() {
 				// method definition
 				continue
 			}
 
-			sr.context.store.register_symbol(mut *sym) or {
+			sr.context.store.register_symbol(sym) or {
 				sr.trace_report_error(err)
 				continue
 			}

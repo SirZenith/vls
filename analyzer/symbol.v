@@ -116,7 +116,10 @@ pub fn (sa SymbolAccess) str() string {
 	}
 }
 
+pub const void_sym_id = -1
+
 pub const void_sym = &Symbol{
+	id: void_sym_id
 	name: 'void'
 	kind: .void
 	file_id: -1
@@ -126,26 +129,52 @@ pub const void_sym = &Symbol{
 
 pub const void_sym_arr = [void_sym]
 
-[heap]
+type SymbolID = int
+
+interface SymbolInfoLoader {
+	get_info(id SymbolID) Symbol
+	get_infos(ids []SymbolID) []Symbol
+}
+
 pub struct Symbol {
-// All field are pub mut to allow inplace info update for a referenced symbol.
+	id SymbolID [required]
 pub mut:
 	name                    string
 	kind                    SymbolKind   // see SymbolKind
 	access                  SymbolAccess // see SymbolAccess
 	range                   C.TSRange
-	parent_sym              &Symbol        = analyzer.void_sym // parent_sym is for typedefs, aliases
-	return_sym              &Symbol        = analyzer.void_sym // return_sym is for functions and variables
 	language                SymbolLanguage = .v
 	is_top_level            bool           [required]
 	is_const                bool
 	generic_placeholder_len int
 	interface_children_len  int
-	children_syms           []&Symbol // methods, sum types, map types, optionals, struct fields, etc.
-	file_id                 int            [required] // id of file that this symbol belons to
-	file_version            int            [required] // file version when the symbol was registered
-	scope                   &ScopeTree = &ScopeTree(0)
+	// Id of file in which this symbol is defined
+	file_id                 int            [required]
+	// File version when the symbol was registered
+	file_version            int            [required]
+	scope                   ScopeID
+	// Lines of docstring comment
 	docstrings              []string
+	// Parent symbol is used to represent:
+	//
+	// - original type of a type alias
+	// - receiver type, if a function symbol is a method
+	// - inner type of a reference type
+	// - inner type of a option/result type
+	parent SymbolID = analyzer.void_sym_id
+	// Return symbol is used to repreent:
+	//
+	// - return type of function, may be a symbol of kind .multi_return
+	// - type of a variable
+	return_sym SymbolID = analyzer.void_sym_id
+	// Child symbol is used to represent:
+	//
+	// - type parameter of array, map
+	// - parameter of function
+	// - field and method of struct
+	// - field and method of interface
+	// - variant of enum
+	children []SymbolID
 }
 
 const kinds_in_multi_return_to_be_excluded = [SymbolKind.function, .variable, .field]
@@ -253,6 +282,63 @@ pub fn (symbols []&Symbol) filter_by_file_id(file_id int) []&Symbol {
 		// unsafe { filtered_from_children.free() }
 	}
 	return filtered
+}
+
+pub fn (mut sym Symbol) update_with(other Symbol) {
+	// skipped fields
+	// sym.id = other.id
+	// sym.is_top_level = other.is_top_level
+	// sym.is_const = other.is_const
+	sym.name = other.name
+	sym.kind = other.kind
+	sym.access = other.access
+	sym.range = other.range
+	sym.language = other.language
+	sym.generic_placeholder_len = other.generic_placeholder_len
+	sym.interface_children_len = other.interface_children_len
+	sym.file_id = other.file_id
+	sym.file_version = other.file_version
+	sym.scope = other.scope
+	sym.docstring = other.docstring.clone()
+	sym.parent = other.parent
+	sym.return_sym = other.return_sym
+	sym.children = other.children.clone()
+}
+
+pub fn (mut sym Symbol) update_load_symbol_with(other Symbol) {
+	// skipped fields
+	// sym.id
+	// sym.is_top_level
+	// sym.is_const
+	// sym.kind = other.kind
+	// sym.language = other.language
+	// sym.generic_placeholder_len = other.generic_placeholder_len
+	// sym.interface_children_len = other.interface_children_len
+	// sym.scope = other.scope
+	// sym.docstring = other.docstring.clone()
+	// sym.parent = other.parent
+	// sym.children = other.children.clone()
+	sym.name = other.name
+	sym.access = other.access
+	sym.range = other.range
+	sym.file_id = other.file_id
+	sym.file_version = other.file_version
+	sym.return_sym = other.return_sym
+}
+
+[inline]
+pub fn (sym Symbol) get_parent(loader SymbolInfoLoader) Symbol {
+	return loader.get_info(sym.parent)
+}
+
+[inline]
+pub fn (sym Symbol) get_return(loader SymbolInfoLoader) Symbol {
+	return loader.get_info(sym.return_sym)
+}
+
+[inline]
+pub fn (sym Symbol) get_children(loader SymbolInfoLoader) []Symbol {
+	return loader.get_infos(sym.children)
 }
 
 // pub fn (mut infos []&Symbol) remove_symbol_by_range(file_path string, range C.TSRange) {
