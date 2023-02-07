@@ -155,9 +155,9 @@ pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) string {
 	return names
 }
 
-pub fn (mgr SymbolManager) get_symbol_range(id SymbolID) C.TSRange {
+pub fn (mgr SymbolManager) get_symbol_range(id SymbolID) ?C.TSRange {
 	if !mgr.is_valid_id(id) {
-		return ''
+		return none
 	}
 	return mgr.symbols[id].range
 }

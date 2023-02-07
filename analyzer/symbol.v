@@ -132,8 +132,22 @@ pub const void_sym_arr = [void_sym]
 type SymbolID = int
 
 interface SymbolInfoLoader {
+	// get_info returns symbol data for given ID.
 	get_info(id SymbolID) Symbol
+	// get_infos returns symbol data for all given IDs in an array.
 	get_infos(ids []SymbolID) []Symbol
+	// find_symbol_by_name looks for symbol with specific name in given ID list.
+	// returns symbol data and its index in ID list, else returns `none`.
+	find_symbol_by_name(ids []SymbolID, name string) ?(Symbol, int)
+	// get_symbol_name returns symbol name for given ID, return empty string if
+	// no such symbol is found.
+	get_symbol_name(id SymbolID) string
+	// get_symbol_names returns an array of symbol name for given id list. Emtpy
+	// string in returned array corresponding symbol for an ID is not found.
+	get_symbol_names(ids []SymbolID) []string
+	// get_symbol_range returns tree-sitter range of symbol specified by ID. `none`
+	// is returned when no such symbol is found.
+	get_symbol_range(id SymbolID) ?C.TSRange
 }
 
 pub struct Symbol {

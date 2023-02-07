@@ -32,6 +32,7 @@ pub fn (scope ScopeTree) str() string {
 	return if isnil(scope) { '<nil scope>' } else { scope.symbols.str() }
 }
 
+// debug_str returns detailed string for scope inspecting.
 pub fn (scope ScopeTree) debug_str(store Store, indent string) string {
 	if scope.symbols.len == 0 && scope.children.len == 0 {
 		return '${indent}{}'
@@ -55,9 +56,16 @@ pub fn (scope ScopeTree) debug_str(store Store, indent string) string {
 	return builder.str()
 }
 
+// is_valid check whether a scope has valid id. If false, no operation should be
+// done with this scope.
+pub fn (scope ScopeTree) is_valid() bool {
+	return scope.id >= 0
+}
+
 // -----------------------------------------------------------------------------
 
-pub fn (mut scope ScopeTree) update_with(other ScopeTree) {
+// update_with updates fields in a scope with provided data.
+fn (mut scope ScopeTree) update_with(other ScopeTree) {
 	scope.parent = other.parent
 	scope.children = other.children.clone()
 	scope.symbols = other.symbols.clone()
@@ -65,36 +73,45 @@ pub fn (mut scope ScopeTree) update_with(other ScopeTree) {
 	scope.end_byte = other.end_byte
 }
 
-pub fn (mut scope ScopeTree) update_parent(id ScopeID) {
+// update_parent sets parent of scope to ID.
+fn (mut scope ScopeTree) update_parent(id ScopeID) {
 	scope.parent = id
 }
 
-pub fn (mut scope ScopeTree) add_child(id ScopeID) {
+// add_child adds ID to scope's child list.
+fn (mut scope ScopeTree) add_child(id ScopeID) {
 	scope.children << id
 }
 
-pub fn (mut scope ScopeTree) add_sybmol(id SymbolID) {
+// add_sybmol adding symbol ID to a scope, this method will check for duplication
+// before appending symbol.
+fn (mut scope ScopeTree) add_sybmol(id SymbolID) {
 	scope.symbols << id
 }
 
-pub fn (mut scope ScopeTree) update_range(start_byte u32, end_byte u32) {
+// update_range sets byte range of a scope with given value.
+fn (mut scope ScopeTree) update_range(start_byte u32, end_byte u32) {
 	scope.start_byte = start_byte
 	scope.end_byte = end_byte
 }
 
+// get_parent returns a copy of scope's parent.
 [inline]
-pub fn (scope ScopeTree) get_parent(loader ScopeInfoLoader) ScopeTree {scope.symbols
+pub fn (scope ScopeTree) get_parent(loader ScopeInfoLoader) ScopeTree {
 	return loader.get_scope_info(scope.parent)
 }
 
+// get_children returns copy of scope's children as an array.
 [inline]
 pub fn (scope ScopeTree) get_children(loader ScopeInfoLoader) []ScopeTree {
 	return loader.get_scope_infos(scope.children)
 }
 
+// get_symbols returns copy of symbols defined in current scope (child scopes
+// not included) as an array.
 [inline]
-pub fn (scope ScopeTree) get_symbols(loader SymbolInfoLoader) []Symbol {
-	return loader.get_infos(scope.symbols)
+pub fn (scope ScopeTree) get_symbols(sym_loader SymbolInfoLoader) []Symbol {
+	return sym_loader.get_infos(scope.symbols)
 }
 
 // -----------------------------------------------------------------------------
@@ -115,7 +132,10 @@ pub fn (scope ScopeTree) innermost(mgr ScopeManager, start_byte u32, end_byte u3
 	return none
 }
 
-pub fn (scope ScopeTree) find_or_create(mut mgr SymbolManager, start_byte u32, end_byte u32) ScopeTree {
+// find_or_create tries walk through scope tree to find a child scope containing
+// given range. If there's no child in current scope or given range is completely
+// contained in found scope, a new child scope is created for this range.
+pub fn (scope ScopeTree) find_or_create(mut mgr ScopeManager, start_byte u32, end_byte u32) ScopeTree {
 	mut innermost := scope.innermost(mgr, start_byte, end_byte) or {
 		new_id := mgr.create_new_scope_child_for(scope.id,
 			start_byte: start_byte
@@ -137,12 +157,12 @@ pub fn (scope ScopeTree) find_or_create(mut mgr SymbolManager, start_byte u32, e
 
 // register_symbol registers new symbol to the scope or updates existing symbol
 // with given data.
-pub fn (mut scope ScopeTree) register_symbol(mut sym_mgr SymbolManager, info Symbol) ! {
+fn (mut scope ScopeTree) register_symbol(mut sym_mgr SymbolManager, info Symbol) ! {
 	if scope.id == empty_scope_id {
 		return error('trying to register symbol in a invalid scope')
 	}
 
-	if sym := sym_mgr.find_symbol_by_name(scope.symbols) {
+	if sym, _ := sym_mgr.find_symbol_by_name(scope.symbols, info.name) {
 		sym_mgr.update_local_symbol(sym.id, info) or {
 			pos_str := 'scope [${scope.start_byte}, ${scope.end_byte}), idx = ${index}, name="${sym.name}"'
 			return error('${err.msg()}, ${pos_str}')
@@ -158,7 +178,7 @@ pub fn (mut scope ScopeTree) register_symbol(mut sym_mgr SymbolManager, info Sym
 }
 
 // get_scope retrieves a symbol with given name in current scope
-pub fn (scope ScopeTree) get_symbol(sym_mgr SymbolManager, name string) ?Symbol {
+pub fn (scope ScopeTree) get_symbol(sym_loader SymbolInfoLoader, name string) ?Symbol {
 	return if sym, _ := sym_mgr.find_symbol_by_name(scope.symbols, name) {
 		sym
 	} else {
@@ -168,10 +188,14 @@ pub fn (scope ScopeTree) get_symbol(sym_mgr SymbolManager, name string) ?Symbol 
 
 // remove_symbols_by_line remove all symbols fall in given range. Returns true
 // if no symbol is defined directly in this scope after deleting.
-pub fn (mut scope ScopeTree) remove_symbols_by_line(sym_mgr SymbolManager, start_line u32, end_line u32) bool {
-	// iterate in reverse order to ensure `delete` always delets the right element.
+fn (mut scope ScopeTree) remove_symbols_by_line(sym_loader SymbolInfoLoader, start_line u32, end_line u32) bool {
+	// iterate in reverse order to ensure `delete` always delets the right index.
 	for i := scope.symbols.len - 1; i >= 0; i-- {
-		range := sym_mgr.get_symbol_range(scope.symbols[i])
+		range := sym_mgr.get_symbol_range(scope.symbols[i]) or {
+			scope.symbols.delete(i)
+			continue
+		}
+
 		if within_range(range, start_line, end_line) {
 			scope.symbols.delete(i)
 		}
@@ -181,7 +205,7 @@ pub fn (mut scope ScopeTree) remove_symbols_by_line(sym_mgr SymbolManager, start
 }
 
 // remove removes the specified symbol
-pub fn (mut scope ScopeTree) remove(sym_mgr SymbolManager, name string) bool {
+fn (mut scope ScopeTree) remove(sym_loader SymbolInfoLoader, name string) bool {
 	return if _, index := sym_mgr.find_symbol_by_name(scope.symbols, name) {
 		scope.symbols.delete(index)
 		true
@@ -190,14 +214,15 @@ pub fn (mut scope ScopeTree) remove(sym_mgr SymbolManager, name string) bool {
 	}
 }
 
-// get_symbols before returns a list of symbols that are available before
+// get_symbols before returns a list of symbols that are defined before
 // the target byte offset
-pub fn (scope ScopeTree) get_symbols_before(mgr ScopeManager, sym_mgr SymbolManager, target_byte u32) []SymbolID {
+pub fn (scope ScopeTree) get_symbols_before(mgr ScopeManager, sym_loader SymbolInfoLoader, target_byte u32) []SymbolID {
 	mut ids := []Symbol{}
 	mut selected_scope := scope.innermost(mgr, target_byte, target_byte) or { return ids }
 	
 	for {
-		for sym in selected_scope.symbols {
+		for id in selected_scope.symbols {
+			range := sym_loader.get_symbol_range(id) or { continue }
 			if sym.range.start_byte <= target_byte && sym.range.end_byte <= target_byte {
 				ids << sym
 			}
@@ -213,9 +238,9 @@ pub fn (scope ScopeTree) get_symbols_before(mgr ScopeManager, sym_mgr SymbolMana
 }
 
 // get_symbol returns a symbol from a specific range
-pub fn (scope ScopeTree) get_symbol_with_range(mgr ScopeManager, sym_mgr SymbolManager, name string, range C.TSRange) ?Symbol {
+pub fn (scope ScopeTree) get_symbol_with_range(mgr ScopeManager, sym_loader SymbolInfoLoader, name string, range C.TSRange) ?Symbol {
 	ids := scope.get_symbols_before(range.end_byte)
-	return return if sym, _ := sym_mgr.find_symbol_by_name(ids, name) {
+	return return if sym, _ := sym_loader.find_symbol_by_name(ids, name) {
 		sym
 	} else {
 		none
