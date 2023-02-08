@@ -44,10 +44,14 @@ pub fn (mgr ScopeManager) get_infos(ids []ScopeID) []ScopeTree {
 	return scopes
 }
 
+// get_file_scope_id returns file scope id for given file. Returns `none` if such
+// file were never opened.
 pub fn (mgr ScopeManager) get_file_scope_id(file_path string) ?ScopeID {
 	return mgr.file_scopes[file_path] or { none }
 }
 
+// get_file_scope returns a copy of file scope specified by `file_path`. Returns
+// `none` if such file were never opened.
 pub fn (mgr ScopeManager) get_file_scope(file_path string) ?ScopeTree {
 	id := mgr.get_file_scope_id(file_path)?
 	return mgr.get_info(id)
@@ -155,7 +159,7 @@ pub fn (mut mgr ScopeManager) get_scope_from_node(file_path string, node ast.Nod
 	}
 
 	id := if node.type_name == .source_file {
-		if old_id := mgr.opened_scopes[file_path] {
+		if old_id := mgr.get_file_scope_id(file_path) {
 			mgr.update_scope(old_id, ScopeTree{
 				...mgr.get_info(old_id)
 				start_byte: node.start_byte()
@@ -176,6 +180,7 @@ pub fn (mut mgr ScopeManager) get_scope_from_node(file_path string, node ast.Nod
 	return id
 }
 
+// register_symbol adds a symbol ID to scope `id`.
 pub fn (mut mgr ScopeManager) register_symbol(mut sym_mgr SymbolManager, id ScopeID, info Symbol) ! {
 	mut scope := mgr.get_info_ref(id)!
 	return scope.register_symbol(sym_mgr, info)
@@ -188,7 +193,7 @@ pub fn (mut mgr ScopeManager) remove_symbols_by_line(sym_mgr SymbolManager, id S
 		return true
 	}
 
-	mut scope = &mgr.scopes[id]
+	mut scope = mgr.get_info_ref(id) or { return true }
 	mut is_empty = scope.remove_symbols_by_line(sym_mgr, start_line, end_line)
 
 	// iterate in reverse order to ensure `delete` always delets the right element.
@@ -205,17 +210,15 @@ pub fn (mut mgr ScopeManager) remove_symbols_by_line(sym_mgr SymbolManager, id S
 	return is_empty
 }
 
-pub fn (mut mgr ScopeManager) remove(sym_mgr SymbolManager, id ScopeID, name string) bool {
-	if !mgr.is_valid_id(id) {
-		return false
-	}
-	return mgr.scopes[id].remove(sym_mgr, name)
+// remove_symbol_by_name removes a symbol with name `name` from scope `id`. Returns
+// `true` when such symbol is found and deleted.
+pub fn (mut mgr ScopeManager) remove_symbol_by_name(sym_mgr SymbolManager, id ScopeID, name string) bool {
+	mut scope := mgr.get_info_ref(id) or { return false }
+	return scope.remove_symbol_by_name(sym_mgr, name)
 }
 
+// get_symbol_with_range finds symbo with name in within specific range.
 pub fn (mgr ScopeManager) get_symbol_with_range(sym_mgr SymbolManager, id ScopeID, name string, range C.TSRange) ?Symbol {
-	if !mgr.is_valid_id(id) {
-		return none
-	}
-	scope := mgr.get_info(id)
+	scope := mgr.get_info_ref(id) or { return none }
 	return scope.get_symbol_with_range(mgr, sym_mgr, name, range)
 }

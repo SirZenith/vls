@@ -204,8 +204,9 @@ fn (mut scope ScopeTree) remove_symbols_by_line(sym_loader SymbolInfoLoader, sta
 	return scope.symbols.len == 0
 }
 
-// remove removes the specified symbol
-fn (mut scope ScopeTree) remove(sym_loader SymbolInfoLoader, name string) bool {
+// remove_symbol_by_name removes the the symbol with name `name`. Returns `true`
+// when such symbol is found and deleted.
+fn (mut scope ScopeTree) remove_symbol_by_name(sym_loader SymbolInfoLoader, name string) bool {
 	return if _, index := sym_mgr.find_symbol_by_name(scope.symbols, name) {
 		scope.symbols.delete(index)
 		true
@@ -237,7 +238,7 @@ pub fn (scope ScopeTree) get_symbols_before(mgr ScopeManager, sym_loader SymbolI
 	return ids
 }
 
-// get_symbol returns a symbol from a specific range
+// get_symbol_with_range finds symbo with given name within specific range.
 pub fn (scope ScopeTree) get_symbol_with_range(mgr ScopeManager, sym_loader SymbolInfoLoader, name string, range C.TSRange) ?Symbol {
 	ids := scope.get_symbols_before(range.end_byte)
 	return return if sym, _ := sym_loader.find_symbol_by_name(ids, name) {
