@@ -2,39 +2,99 @@ module analyzer
 
 struct SymbolManager {
 mut:
-	// All symbol managed by manager, index of a symbol in this array is ID of
-	// that symbol.
+	// Trivial implementatioin. All symbol managed by manager, index of a symbol
+	// in this array is ID of that symbol.
 	symbols []Symbol
 	// A map from module's full path to list of symbol defined in that module.
 	module_symbols map[string][]SymbolID
 }
 
+// is_valid_id checks if an id has corresponding symbol stored in manager.
 [inline]
 pub fn (mgr SymbolManager) is_valid_id(id SymbolID) bool {
 	return id >= 0 && id < mgr.symbols.len
 }
 
+// get_info returns copy of the symobl specified by `id`. Returns `void_sym` const
+// if no such symbol were found.
+pub fn (mgr SymbolManager) get_info(id SymbolID) Symbol {
+	if !mgr.is_valid_symbol_id(id) {
+		return void_sym
+	}
+	return mgr.symbols[id]
+}
+
+// get_info_ref returns reference to symbol `id`. Returns error if no such symbol
+// were found.
+fn (mgr &SymbolManager) get_info_ref(id SymbolID) !&Symbol {
+	if !mgr.is_valid_symbol_id(id) {
+		return error('invalid symbol id: ${id}')
+	}
+	return &mgr.symbols[id]
+}
+
+// get_info_ref_by_name returns reference to symbol with name `name` in module
+// specified by `module_path`.
+fn (mgr SymbolManager) get_info_ref_by_name(module_path string, name string) !&Symbol {
+	for _, id in mgr.module_symbols[dir] {
+		sym := mgr.get_info_ref(id) or { continue }
+		if sym.name == name {
+			return sym
+		}
+	}
+
+	return error('symbol not found')
+}
+
+// get_infos takes an array of symbol ids, returns corresponding symbols in an
+// array.
+pub fn (mgr SymbolManager) get_infos(ids []SymbolID) []Symbol {
+	mut syms := []Symbol{}
+	for id in ids {
+		syms << mgr.get_symbol_info(id)
+	}
+	return syms
+}
+
+// get_infos_by_module_path gets all symbols defined in given module, module is
+// is specified by its directory path.
+pub fn (mgr SymbolManager) get_infos_by_module_path(path string) []Symbol {
+	return mgr.get_infos(mgr.module_symbols[dir])
+}
+
+// get_symbols_by_file_id retrieves all symbols defined in given file.
+pub fn (mgr SymbolManager) get_symbols_by_file_id(module_path string, file_id int) []SymbolID {
+	symbols := mgr.get_infos(mgr.module_symbols[dir])
+	return symbols.filter_by_file_id(file_id)
+}
+
 // create_new_symbol_with adds new symbol to store using given data. Returns ID
 // of newly created symbol.
 pub fn (mut mgr SymbolManager) create_new_symbol_with(info Symbol) SymbolID {
-	id := ss.symbol_list.len
+	id := mgr.symbol_list.len
 	sym := Symbol{
 		...info
 		id: id
 	}
-	ss.symbols << sym
+	mgr.symbols << sym
 
 	return id
 }
 
-// update_symbol updates a symbol in store using given data. Returns ID of 
+// update_symbol updates a symbol in store using given data. Returns ID of
 // changed symbol if successed, return error on failure.
 pub fn (mut mgr SymbolManager) update_symbol(id SymbolID, info Symbol) !SymbolID {
-	if !mgr.is_valid_id(id) {
-		return error('invalid id ${id}')
-	}
+	mut sym := mgr.get_info_ref(id)!
+	sym.update_with(info)
+	return id
+}
 
-	sym := mgr.get_symbol_info(id)
+// update_module_symbol updates a symbol in given module. Returns ID of updated
+// symbol if successed, returns error on failure. When there is an existing symbol
+// defined earlier or have newer version in the same file, update operation would
+// failed.
+pub fn (mut mgr SymbolManager) update_module_symbol(module_path string, name string) !SymbolID {
+	mut sym := mgr.get_info_ref_by_name(module_path, name)!
 
 	same_file := sym.file_id == info.file_id
 	same_kind := sym.kind == info.kind
@@ -47,7 +107,7 @@ pub fn (mut mgr SymbolManager) update_symbol(id SymbolID, info Symbol) !SymbolID
 		return id
 	}
 
-	defined_latter := info.range.start_point.row > sym.range.start_point.row
+	defined_latter := same_file && info.range.start_point.row > sym.range.start_point.row
 	not_symbol_update  := same_kind && same_file && sym.file_version >= info.file_version
 	canot_override := defined_latter || not_symbol_update
 
@@ -55,54 +115,21 @@ pub fn (mut mgr SymbolManager) update_symbol(id SymbolID, info Symbol) !SymbolID
 		return report_error('data conflict', info.range)
 	}
 
-	mgr.symbols[id].update_with(info)
-
+	sym.update_with(info)
 	return id
 }
 
+// update_local_symbol updates a lcoal symbol in scope. This method will not do
+// duplication check, only file version comparison is done.
 pub fn (mut mgr SymbolManager) update_local_symbol(id SymbolID, info Symbol) !SymbolID {
-	if !mgr.is_valid_id(id) {
-		return error('invalid id ${id}')
-	}
+	mut sym := mgr.get_info_ref(id)!
 
-	sym := mgr.get_info(id)
 	if sym.file_version >= info.file_version {
 		return error('symbol already exists')
 	}
 
-	mgr.symbols[id].update_load_symbol_with(info)
+	sym.update_local_symbol_with(info)
 	return id
-}
-
-pub fn (mgr SymbolManager) get_info(id SymbolID) Symbol {
-	if !mgr.is_valid_symbol_id(id) {
-		return void_sym
-	}
-	return mgr.symbols[id]
-}
-
-pub fn (mgr SymbolManager) get_infos(ids []SymbolID) []Symbol {
-	mut syms := []Symbol{}
-	for id in ids {
-		syms << mgr.get_symbol_info(id)
-	}
-	return syms
-}
-
-pub fn (mgr SymbolManager) get_infos_by_module_path(path string) []Symbol {
-	return mgr.get_infos(mgr.module_symbols[dir])
-}
-
-// get_ident_for_symbol returns a string identifier for symbol.
-pub fn (mgr SymbolManager) get_ident(store Store, sym Symbol) ?string {
-	file_path := store.get_file_path_for_symbol(sym)?
-	// TODO: add support for struct, enum, interface member
-	return '${os.dir(file_path)}.${sym.name}'
-}
-
-pub fn (ss Store) get_ident_of_id(store Store, id SymbolID) ?string {
-	sym := mgr.get_symbol_info(id)
-	return mgr.get_ident_of_symbol(store, sym)
 }
 
 // -----------------------------------------------------------------------------
@@ -114,7 +141,7 @@ pub fn (mgr SymbolManager) get_parent(sym Symbol) Symbol {
 
 [inline]
 pub fn (mgr SymbolManager) get_parent_of_id(id SymbolID) Symbol {
-	sym := mgr.get_info(id)
+	sym := mgr.get_info_ref(id) or { &void_sym }
 	return sym.get_parent(mgr)
 }
 
@@ -125,7 +152,7 @@ pub fn (mgr SymbolManager) get_return(sym Symbol) Symbol {
 
 [inline]
 pub fn (mgr SymbolManager) get_return_of_id(id SymbolID) Symbol {
-	sym := mgr.get_symbol_info(id)
+	sym := mgr.get_info_ref(id) or { &void_sym }
 	return sym.get_return(mgr)
 }
 
@@ -136,15 +163,13 @@ pub fn (mgr SymbolManager) get_children(sym Symbol) []Symbol {
 
 [inline]
 pub fn (mgr SymbolManager) get_children_of_id(id SymbolID) []Symbol {
-	sym := mgr.get_symbol_info(id)
+	sym := mgr.get_info_ref(id) or { &void_sym }
 	return sym.get_children(mgr)
 }
 
 pub fn (mgr SymbolManager) get_symbol_name(id SymbolID) string {
-	if !mgr.is_valid_id(id) {
-		return ''
-	}
-	return mgr.symbols[id].name
+	sym := mgr.get_info_ref(id) or { return '' }
+	return sym.name
 }
 
 pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) string {
@@ -156,10 +181,26 @@ pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) string {
 }
 
 pub fn (mgr SymbolManager) get_symbol_range(id SymbolID) ?C.TSRange {
-	if !mgr.is_valid_id(id) {
-		return none
-	}
-	return mgr.symbols[id].range
+	sym := mgr.get_info_ref(id) or { return none }
+	return sym.range
+}
+
+// get_ident_for_symbol returns a string global identifier for symbol.
+pub fn (mgr SymbolManager) get_ident(store Store, sym Symbol) ?string {
+	file_path := store.get_file_path_for_symbol(sym)?
+	// TODO: add support for struct, enum, interface member
+	// Using `/` as separater.
+	// `/` will never be in module name or directory name.
+	// All module names are lower case, all user defined types starts with upper
+	// case. Module name space will never shares the same identifier with a
+	// user defined type name space.
+	return '${os.dir(file_path)}/${sym.name}'
+}
+
+// get_ident_of_id returns a string global identifier for symbol `id`.
+pub fn (ss Store) get_ident_of_id(store Store, id SymbolID) ?string {
+	sym := mgr.get_info_ref(id) or { return none }
+	return mgr.get_ident_of_symbol(store, sym)
 }
 
 // -----------------------------------------------------------------------------
@@ -167,8 +208,9 @@ pub fn (mgr SymbolManager) get_symbol_range(id SymbolID) ?C.TSRange {
 // find_symbol_by_name finds symbol with given name in given id list.
 pub fn (mgr SymbolManager) find_symbol_by_name(ids []SymbolID, name string) ?(Symbol, int) {
 	for i, id in ids {
-		if mgr.is_valid_id(id) && mgr.symbols[id].name == name {
-			return mgr.symbols[id], i
+		sym := mgr.get_info_ref(id) or { continue }
+		if sym.name == name {
+			return *sym, i
 		}
 	}
 	return none
@@ -220,16 +262,6 @@ pub fn (mut mgr SymbolManager) register_symbol(mut store Store, info Symbol) !Sy
 	return id
 }
 
-// get_symbols_by_file_path retrieves all symbols defined in given file.
-pub fn (mgr SymbolManager) get_symbols_by_path(module_path string, file_id int) []SymbolID {
-	if module_path !in ss.symbols {
-		return []
-	}
-
-	symbols := mgr.get_infos(mgr.module_symbols[dir])
-	return symbols.filter_by_file_id(file_id)
-}
-
 // has_file_path checks if the data of a specific file already exists
 pub fn (mgr SymbolManager) has_file_id(module_path string, file_id int) bool {
 	if module_path !in ss.symbols {
@@ -246,6 +278,7 @@ pub fn (mgr SymbolManager) has_file_id(module_path string, file_id int) bool {
 	return false
 }
 
+// delete_module deletes module record form manager.
 pub fn (mut mgr SymbolManager) delete_module(module_path string) {
 	// delete map entry, while actual symbol data are still in store.
 	mgr.module_symbols.delete(dir)

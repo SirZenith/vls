@@ -4,8 +4,8 @@ import ast
 
 struct ScopeManager {
 mut:
-	// All scopes managed by manager, index of a scope in this array, is ID of
-	// that scope.
+	// Trivial implementation. All scopes managed by manager, index of a scope
+	// in this array, is ID of that scope.
 	scopes []ScopeTree
 	// A map from file path to id of its source file scope.
 	file_scopes map[string]ScopeID
@@ -121,7 +121,7 @@ pub fn (mgr ScopeManager) get_parent(scope ScopeTree) ScopeTree {
 // get_parent_of_id returns copy of scope `id`'s parent scope.
 [inline]
 pub fn (mgr ScopeManager) get_parent_of_id(id ScopeID) ScopeTree {
-	scope := mgr.get_info_ref(id)
+	scope := mgr.get_info_ref(id) or { analyzer.empty_scope }
 	return scope.get_parent(mgr)
 }
 
@@ -134,7 +134,7 @@ pub fn (mgr ScopeManager) get_children(scope ScopeTree) []ScopeTree {
 // get_children_of_id returns copy of scope `id`'s children in an array.
 [inline]
 pub fn (mgr ScopeManager) get_children_of_id(id ScopeID) []ScopeTree {
-	scope := mgr.get_info_ref(id)
+	scope := mgr.get_info_ref(id) or { analyzer.empty_scope }
 	return scope.get_children(mgr)
 }
 
@@ -147,7 +147,7 @@ pub fn (mgr ScopeManager) get_symbols(sym_mgr SymbolManager, scope ScopeTree) []
 // get_symbols returns copy of symbols defined  in scope `id` in an array.
 [inline]
 pub fn (mgr ScopeManager) get_symbols_of_id(sym_mgr SymbolManager, id ScopeID) []Symbol {
-	scope := mgr.get_info_ref(id)
+	scope := mgr.get_info_ref(id) or { analyzer.empty_scope }
 	return scope.get_symbols(sym_mgr)
 }
 

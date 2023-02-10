@@ -319,7 +319,7 @@ pub fn (mut sym Symbol) update_with(other Symbol) {
 	sym.children = other.children.clone()
 }
 
-pub fn (mut sym Symbol) update_load_symbol_with(other Symbol) {
+pub fn (mut sym Symbol) update_local_symbol_with(other Symbol) {
 	// skipped fields
 	// sym.id
 	// sym.is_top_level

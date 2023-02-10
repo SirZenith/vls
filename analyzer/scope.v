@@ -98,13 +98,13 @@ fn (mut scope ScopeTree) update_range(start_byte u32, end_byte u32) {
 // get_parent returns a copy of scope's parent.
 [inline]
 pub fn (scope ScopeTree) get_parent(loader ScopeInfoLoader) ScopeTree {
-	return loader.get_scope_info(scope.parent)
+	return loader.get_info(scope.parent)
 }
 
 // get_children returns copy of scope's children as an array.
 [inline]
 pub fn (scope ScopeTree) get_children(loader ScopeInfoLoader) []ScopeTree {
-	return loader.get_scope_infos(scope.children)
+	return loader.get_infos(scope.children)
 }
 
 // get_symbols returns copy of symbols defined in current scope (child scopes
