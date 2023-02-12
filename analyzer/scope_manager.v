@@ -82,9 +82,9 @@ pub fn (mut mgr ScopeManager) create_new_scope_child_for(id ScopeID, child Scope
 
 // update_scope updates existing scope with given data, returns ID of changed
 // scope. Returns error if target scope were not found.
-pub fn (mut mgr ScopeManager) update_scope(id ScopeID, scope ScopeTree) !ScopeID {
+pub fn (mut mgr ScopeManager) update_scope(id ScopeID, other ScopeTree) !ScopeID {
 	mut scope := mgr.get_info_ref(id)!
-	scope.update_with(scope)
+	scope.update_with(other)
 	return id
 }
 
@@ -193,8 +193,8 @@ pub fn (mut mgr ScopeManager) remove_symbols_by_line(sym_mgr SymbolManager, id S
 		return true
 	}
 
-	mut scope = mgr.get_info_ref(id) or { return true }
-	mut is_empty = scope.remove_symbols_by_line(sym_mgr, start_line, end_line)
+	mut scope := mgr.get_info_ref(id) or { return true }
+	mut is_empty := scope.remove_symbols_by_line(sym_mgr, start_line, end_line)
 
 	// iterate in reverse order to ensure `delete` always delets the right element.
 	for i := scope.children.len - 1; i >= 0; i-- {

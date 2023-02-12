@@ -123,7 +123,7 @@ pub fn (scope ScopeTree) contains(pos u32) bool {
 
 // innermost returns the smallest child scope containing given range in current scope.
 pub fn (scope ScopeTree) innermost(mgr ScopeManager, start_byte u32, end_byte u32) ?ScopeTree {
-	children := store.get_children(mgr)
+	children := scope.get_children(mgr)
 	for child_scope in children {
 		if child_scope.contains(start_byte) && child_scope.contains(end_byte) {
 			return child_scope.innermost(mgr, start_byte, end_byte) or { return child_scope }
@@ -224,7 +224,7 @@ pub fn (scope ScopeTree) get_symbols_before(mgr ScopeManager, sym_loader SymbolI
 	for {
 		for id in selected_scope.symbols {
 			range := sym_loader.get_symbol_range(id) or { continue }
-			if sym.range.start_byte <= target_byte && sym.range.end_byte <= target_byte {
+			if range.start_byte <= target_byte && range.end_byte <= target_byte {
 				ids << sym
 			}
 		}
@@ -241,7 +241,7 @@ pub fn (scope ScopeTree) get_symbols_before(mgr ScopeManager, sym_loader SymbolI
 // get_symbol_with_range finds symbo with given name within specific range.
 pub fn (scope ScopeTree) get_symbol_with_range(mgr ScopeManager, sym_loader SymbolInfoLoader, name string, range C.TSRange) ?Symbol {
 	ids := scope.get_symbols_before(range.end_byte)
-	return return if sym, _ := sym_loader.find_symbol_by_name(ids, name) {
+	return if sym, _ := sym_loader.find_symbol_by_name(ids, name) {
 		sym
 	} else {
 		none

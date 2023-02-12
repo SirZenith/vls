@@ -68,6 +68,12 @@ pub fn (mgr SymbolManager) get_symbols_by_file_id(module_path string, file_id in
 	return symbols.filter_by_file_id(file_id)
 }
 
+// delete_module deletes module record form manager.
+pub fn (mut mgr SymbolManager) delete_module(module_path string) {
+	// delete map entry, while actual symbol data are still in store.
+	mgr.module_symbols.delete(dir)
+}
+
 // create_new_symbol_with adds new symbol to store using given data. Returns ID
 // of newly created symbol.
 pub fn (mut mgr SymbolManager) create_new_symbol_with(info Symbol) SymbolID {
@@ -134,44 +140,53 @@ pub fn (mut mgr SymbolManager) update_local_symbol(id SymbolID, info Symbol) !Sy
 
 // -----------------------------------------------------------------------------
 
+// get_parent returns copy of given symbol's parent symbol.
 [inline]
 pub fn (mgr SymbolManager) get_parent(sym Symbol) Symbol {
 	return sym.get_parent(mgr)
 }
 
+// get_parent returns coyp of symbol `id`'s parent symbol.
 [inline]
 pub fn (mgr SymbolManager) get_parent_of_id(id SymbolID) Symbol {
 	sym := mgr.get_info_ref(id) or { &void_sym }
 	return sym.get_parent(mgr)
 }
 
+// get_return returns copy of given symbol's return symbol.
 [inline]
 pub fn (mgr SymbolManager) get_return(sym Symbol) Symbol {
 	return sym.get_return(mgr)
 }
 
+// get_return_of_id returns copy of symbol `id`'s return symbol.
 [inline]
 pub fn (mgr SymbolManager) get_return_of_id(id SymbolID) Symbol {
 	sym := mgr.get_info_ref(id) or { &void_sym }
 	return sym.get_return(mgr)
 }
 
+// get_children returns copy of given symbol's children in an array.
 [inline]
 pub fn (mgr SymbolManager) get_children(sym Symbol) []Symbol {
 	return sym.get_children(mgr)
 }
 
+// get_children_of_id returns copy of symbol `id`'s children in an array.
 [inline]
 pub fn (mgr SymbolManager) get_children_of_id(id SymbolID) []Symbol {
 	sym := mgr.get_info_ref(id) or { &void_sym }
 	return sym.get_children(mgr)
 }
 
+// get_symbol_name returns name of symbol `id`.
 pub fn (mgr SymbolManager) get_symbol_name(id SymbolID) string {
 	sym := mgr.get_info_ref(id) or { return '' }
 	return sym.name
 }
 
+// get_symbol_names takes an array of symbol id, returns corresponding names in
+// an array.
 pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) string {
 	mut names := []string{}
 	for id in ids {
@@ -180,6 +195,7 @@ pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) string {
 	return names
 }
 
+// get_symbol_range returns tree-sitter range of symbol `id`
 pub fn (mgr SymbolManager) get_symbol_range(id SymbolID) ?C.TSRange {
 	sym := mgr.get_info_ref(id) or { return none }
 	return sym.range
@@ -276,10 +292,4 @@ pub fn (mgr SymbolManager) has_file_id(module_path string, file_id int) bool {
 	}
 
 	return false
-}
-
-// delete_module deletes module record form manager.
-pub fn (mut mgr SymbolManager) delete_module(module_path string) {
-	// delete map entry, while actual symbol data are still in store.
-	mgr.module_symbols.delete(dir)
 }

@@ -118,7 +118,7 @@ pub fn (sa SymbolAccess) str() string {
 
 pub const void_sym_id = -1
 
-pub const void_sym = &Symbol{
+pub const void_sym = Symbol{
 	id: void_sym_id
 	name: 'void'
 	kind: .void
@@ -180,6 +180,7 @@ pub mut:
 	//
 	// - return type of function, may be a symbol of kind .multi_return
 	// - type of a variable
+	// - type of a struct field.
 	return_sym SymbolID = analyzer.void_sym_id
 	// Child symbol is used to represent:
 	//
@@ -195,39 +196,24 @@ const kinds_in_multi_return_to_be_excluded = [SymbolKind.function, .variable, .f
 
 const type_defining_sym_kinds = [SymbolKind.struct_, .enum_, .typedef, .interface_, .sumtype]
 
-[params]
-pub struct SymbolGenStrConfig {
-	module_prefix string
-	with_kind     bool = true
-	with_access   bool = true
-	with_contents bool = true
-}
+const sym_kinds_allowed_to_print_parent = [SymbolKind.typedef, .function]
 
-const child_cfg = SymbolGenStrConfig{
-	with_kind: false
-	with_access: false
-	with_contents: false
-}
-
-pub fn (sym &Symbol) str() string {
-	if isnil(sym) {
-		return 'nil symbol'
-	}
-
+pub fn (sym Symbol) str() string {
 	return sym.name
 }
 
-pub fn (sym &Symbol) debug_str(indent string) string {
+pub fn (sym Symbol) debug_str(loader SymbolInfoLoader, indent string) string {
 	mut builder := strings.new_builder(30)
 
 	builder.write_string('${indent}${sym.name}')
 	if sym.is_type_defining_kind() {
 		builder.write_string('{')
-		for child in sym.children_syms {
+		children := sym.get_children(loader)
+		for child in children {
 			builder.write_string(child.debug_str(indent + '\t'))
 			builder.write_byte(`\n`)
 		}
-		if sym.children_syms.len > 0 {
+		if children.len > 0 {
 			builder.write_string('${indent}}')
 		} else {
 			builder.write_string(' }')
@@ -235,10 +221,10 @@ pub fn (sym &Symbol) debug_str(indent string) string {
 	} else {
 		match sym.kind {
 			.variable, .field {
-				builder.write_string(': ${sym.return_sym.name}')
+				builder.write_string(': ${sym.get_return(loader).name}')
 			}
 			.function {
-				builder.write_string(': function -> ${sym.return_sym.name}')
+				builder.write_string(': function -> ${sym.get_return(loader).name}')
 			}
 			else {
 				builder.write_string('(${sym.kind})')
@@ -249,15 +235,14 @@ pub fn (sym &Symbol) debug_str(indent string) string {
 	return builder.str()
 }
 
-const sym_kinds_allowed_to_print_parent = [SymbolKind.typedef, .function]
-
-pub fn (infos []&Symbol) str() string {
-	return '[' + infos.map(it.str()).join(', ') + ']'
+pub fn (symbols []Symbol) str() string {
+	return '[' + symbols.map(it.str()).join(', ') + ']'
 }
 
-// index returns the index based on the given symbol name
-pub fn (infos []&Symbol) index(name string) int {
-	for i, v in infos {
+// index locates the symbol with name `name` and returns its index. Returns `-1`
+// if no such symbol were found.
+pub fn (symbols []Symbol) index(name string) int {
+	for i, v in symbols {
 		if v.name == name {
 			return i
 		}
@@ -266,9 +251,10 @@ pub fn (infos []&Symbol) index(name string) int {
 	return -1
 }
 
-// index_by_row returns the index based on the given file path and row
-pub fn (infos []&Symbol) index_by_row(file_id int, row u32) int {
-	for i, v in infos {
+// index_by_row locates the symbol starts at row `row` and returns its index.
+// Returns `-1` if no such symbol were found.
+pub fn (symbols []Symbol) index_by_row(file_id int, row u32) int {
+	for i, v in symbols {
 		if v.file_id == file_id && v.range.start_point.row == row {
 			return i
 		}
@@ -277,82 +263,23 @@ pub fn (infos []&Symbol) index_by_row(file_id int, row u32) int {
 	return -1
 }
 
-pub fn (symbols []&Symbol) filter_by_file_id(file_id int) []&Symbol {
-	mut filtered := []&Symbol{}
+// filter_by_file_id recursively finds all symbols and their children defined in
+// given file.
+pub fn (symbols []Symbol) filter_by_file_id(loader SymbolInfoLoader, file_id int) []Symbol {
+	mut filtered := []Symbol{}
 	for sym in symbols {
 		if sym.file_id == file_id {
 			filtered << sym
 		}
 
-		filtered_from_children := sym.children_syms
+		filtered_from_children := sym.get_children(loader)
 			.filter(!symbols.exists(it.name))
+			.filter(!filtered.exists(it.name))
 			.filter_by_file_id(file_id)
-		for child_sym in filtered_from_children {
-			if filtered.exists(child_sym.name) {
-				continue
-			}
-			filtered << child_sym
-		}
-		// unsafe { filtered_from_children.free() }
+
+		filtered << filtered_from_children
 	}
 	return filtered
-}
-
-pub fn (mut sym Symbol) update_with(other Symbol) {
-	// skipped fields
-	// sym.id = other.id
-	// sym.is_top_level = other.is_top_level
-	// sym.is_const = other.is_const
-	sym.name = other.name
-	sym.kind = other.kind
-	sym.access = other.access
-	sym.range = other.range
-	sym.language = other.language
-	sym.generic_placeholder_len = other.generic_placeholder_len
-	sym.interface_children_len = other.interface_children_len
-	sym.file_id = other.file_id
-	sym.file_version = other.file_version
-	sym.scope = other.scope
-	sym.docstring = other.docstring.clone()
-	sym.parent = other.parent
-	sym.return_sym = other.return_sym
-	sym.children = other.children.clone()
-}
-
-pub fn (mut sym Symbol) update_local_symbol_with(other Symbol) {
-	// skipped fields
-	// sym.id
-	// sym.is_top_level
-	// sym.is_const
-	// sym.kind = other.kind
-	// sym.language = other.language
-	// sym.generic_placeholder_len = other.generic_placeholder_len
-	// sym.interface_children_len = other.interface_children_len
-	// sym.scope = other.scope
-	// sym.docstring = other.docstring.clone()
-	// sym.parent = other.parent
-	// sym.children = other.children.clone()
-	sym.name = other.name
-	sym.access = other.access
-	sym.range = other.range
-	sym.file_id = other.file_id
-	sym.file_version = other.file_version
-	sym.return_sym = other.return_sym
-}
-
-[inline]
-pub fn (sym Symbol) get_parent(loader SymbolInfoLoader) Symbol {
-	return loader.get_info(sym.parent)
-}
-
-[inline]
-pub fn (sym Symbol) get_return(loader SymbolInfoLoader) Symbol {
-	return loader.get_info(sym.return_sym)
-}
-
-[inline]
-pub fn (sym Symbol) get_children(loader SymbolInfoLoader) []Symbol {
-	return loader.get_infos(sym.children)
 }
 
 // pub fn (mut infos []&Symbol) remove_symbol_by_range(file_path string, range C.TSRange) {
@@ -377,22 +304,86 @@ pub fn (sym Symbol) get_children(loader SymbolInfoLoader) []Symbol {
 // 	infos.delete(to_delete_i)
 // }
 
-// exists checks if a symbol is present
-pub fn (infos []&Symbol) exists(name string) bool {
-	return infos.index(name) != -1
+// exists checks if there is a symbol named `name` in an array.
+pub fn (symbols []Symbol) exists(name string) bool {
+	return symbols.index(name) != -1
 }
 
-// get retreives the symbol based on the given name
-pub fn (infos []&Symbol) get(name string) ?&Symbol {
-	index := infos.index(name)
-	if index == -1 {
-		return none
+// get retreives the symbol named `name` in array, it no such symbol were found
+// returns `none`.
+pub fn (symbols []Symbol) get(name string) ?Symbol {
+	index := symbols.index(name)
+	return if index == -1 {
+		none
+	} else {
+		symbols[index]
 	}
-	info := infos[index] or { return none }
-	return info
 }
 
-// add_child registers the symbol as child of given parent symbol returns
+// update_with updates symbol fields with given data.
+pub fn (mut sym Symbol) update_with(other Symbol) {
+	// skipped fields
+	// sym.id = other.id
+	// sym.is_top_level = other.is_top_level
+	// sym.is_const = other.is_const
+	sym.name = other.name
+	sym.kind = other.kind
+	sym.access = other.access
+	sym.range = other.range
+	sym.language = other.language
+	sym.generic_placeholder_len = other.generic_placeholder_len
+	sym.interface_children_len = other.interface_children_len
+	sym.file_id = other.file_id
+	sym.file_version = other.file_version
+	sym.scope = other.scope
+	sym.docstring = other.docstring.clone()
+	sym.parent = other.parent
+	sym.return_sym = other.return_sym
+	sym.children = other.children.clone()
+}
+
+// update_local_symbol_with updates a local symbol with given data. Fields that
+// are not used by a local symbol will not be updated compared to `update_with`.
+pub fn (mut sym Symbol) update_local_symbol_with(other Symbol) {
+	// skipped fields
+	// sym.id
+	// sym.is_top_level
+	// sym.is_const
+	// sym.kind = other.kind
+	// sym.language = other.language
+	// sym.generic_placeholder_len = other.generic_placeholder_len
+	// sym.interface_children_len = other.interface_children_len
+	// sym.scope = other.scope
+	// sym.docstring = other.docstring.clone()
+	// sym.parent = other.parent
+	// sym.children = other.children.clone()
+	sym.name = other.name
+	sym.access = other.access
+	sym.range = other.range
+	sym.file_id = other.file_id
+	sym.file_version = other.file_version
+	sym.return_sym = other.return_sym
+}
+
+// get_parent returns copy of symbol's parent.
+[inline]
+pub fn (sym Symbol) get_parent(loader SymbolInfoLoader) Symbol {
+	return loader.get_info(sym.parent)
+}
+
+// get_return returns copy of symbol's return symbol.
+[inline]
+pub fn (sym Symbol) get_return(loader SymbolInfoLoader) Symbol {
+	return loader.get_info(sym.return_sym)
+}
+
+// get_children returns copy of symbol's children in an array.
+[inline]
+pub fn (sym Symbol) get_children(loader SymbolInfoLoader) []Symbol {
+	return loader.get_infos(sym.children)
+}
+
+// add_child registers a symbol as child of given parent symbol, returns
 // error when parent symbol already has a child with the same name.
 pub fn (mut sym Symbol) add_child(mut new_child_sym Symbol, add_as_parent ...bool) ! {
 	if add_as_parent.len == 0 || add_as_parent[0] {
@@ -407,22 +398,14 @@ pub fn (mut sym Symbol) add_child(mut new_child_sym Symbol, add_as_parent ...boo
 	sym.children_syms << new_child_sym
 }
 
-// add_child_allow_duplicated register then symbol as child of given symbol even
+// add_child_allow_duplicated register a symbol as child of given symbol, even
 // if parent symbol already has a child with the same name.
-pub fn (mut sym Symbol) add_child_allow_duplicated(mut new_child_sym Symbol, add_as_parent ...bool) {
-	if add_as_parent.len == 0 || add_as_parent[0] {
-		new_child_sym.parent_sym = unsafe { sym }
-	}
-
+pub fn (mut sym Symbol) add_child_allow_duplicated(mut new_child_sym Symbol) ! {
 	sym.children_syms << new_child_sym
 }
 
 // is_void returns true if a symbol is void/invalid
-pub fn (sym &Symbol) is_void() bool {
-	if isnil(sym) {
-		return true
-	}
-
+pub fn (sym Symbol) is_void() bool {
 	if sym.kind in [.ref, .array_] && sym.children_syms.len >= 1 {
 		return sym.children_syms[0].is_void()
 	}
@@ -430,26 +413,31 @@ pub fn (sym &Symbol) is_void() bool {
 	return sym.kind == .void
 }
 
-pub fn (sym &Symbol) is_returnable() bool {
+// is_returnable checks if symbol has return symbol for recording its type/return type.
+pub fn (sym Symbol) is_returnable() bool {
 	return sym.kind == .variable || sym.kind == .field || sym.kind == .function
 }
 
-pub fn (sym &Symbol) is_mutable() bool {
+// is_mutable checks if a symbol allows mutation access.
+pub fn (sym Symbol) is_mutable() bool {
 	return sym.access == .private_mutable || sym.access == .public_mutable || sym.access == .global
 }
 
 // is_type_defining_kind checks if a symbol defines a type (struct, enum, etc.).
-pub fn (sym &Symbol) is_type_defining_kind() bool {
+pub fn (sym Symbol) is_type_defining_kind() bool {
 	return sym.kind in analyzer.type_defining_sym_kinds
 }
 
-pub fn (sym &Symbol) is_reference() bool {
+// is_reference checks if a symbol is a reference type.
+// Currently this function only returns true for a `.ref` symbol. May also returns
+// true for smart pointers in the future.
+pub fn (sym Symbol) is_reference() bool {
 	return sym.kind == .ref
 }
 
 // get_type_def_keyword returns a keyword corresponding to type definition used by
 // kind of symbol.
-pub fn (sym &Symbol) get_type_def_keyword() ?string {
+pub fn (sym Symbol) get_type_def_keyword() ?string {
 	return match sym.kind {
 		.interface_ { 'interface' }
 		.struct_ { 'struct' }
@@ -468,7 +456,8 @@ pub fn (sym &Symbol) free() {
 	}
 }
 
-fn (sym &Symbol) value_sym() &Symbol {
+// value_sym returns value type of array/map symbol.
+fn (sym Symbol) value_sym() Symbol {
 	if sym.kind == .array_ {
 		return sym.children_syms[0] or { analyzer.void_sym }
 	} else if sym.kind == .map_ {
@@ -481,6 +470,7 @@ fn (sym &Symbol) value_sym() &Symbol {
 fn (sym &Symbol) count_ptr() int {
 	mut ptr_count := 0
 	mut starting_sym := unsafe { sym }
+	// What is it doing?
 	for !isnil(starting_sym) && starting_sym.kind == .ref {
 		ptr_count++
 	}
@@ -500,7 +490,7 @@ pub fn (sym &Symbol) final_sym() &Symbol {
 	}
 }
 
-fn sort_syms_by_name(a &&Symbol, b &&Symbol) int {
+fn sort_syms_by_name(a &Symbol, b &Symbol) int {
 	if a.name < b.name {
 		return -1
 	} else if a.name > b.name {
@@ -510,7 +500,7 @@ fn sort_syms_by_name(a &&Symbol, b &&Symbol) int {
 	return 0
 }
 
-fn sort_syms_by_access_and_name(a &&Symbol, b &&Symbol) int {
+fn sort_syms_by_access_and_name(a &Symbol, b &Symbol) int {
 	if int(a.access) < int(b.access) {
 		return -1
 	} else if int(a.access) > int(b.access) {
@@ -520,14 +510,16 @@ fn sort_syms_by_access_and_name(a &&Symbol, b &&Symbol) int {
 	return sort_syms_by_name(a, b)
 }
 
-pub fn (sym &Symbol) get_fields() ?[]&Symbol {
+// get_fields returns a sorted field symbol array for type definition symbol
+// (struct, enum, etc.).
+pub fn (sym Symbol) get_fields(loader SymbolInfoLoader) ?[]Symbol {
 	if !sym.is_type_defining_kind() {
 		return none
 	}
 
-	mut syms := []&Symbol{}
+	mut syms := []Symbol{}
 
-	for child in sym.children_syms {
+	for child in sym.get_children(loader) {
 		if child.kind != .function {
 			syms << child
 		}
@@ -541,14 +533,16 @@ pub fn (sym &Symbol) get_fields() ?[]&Symbol {
 	return syms
 }
 
-pub fn (sym &Symbol) get_methods() ?[]&Symbol {
+// get_methods returns a sorted method symbol array for type definition symbol
+// (struct, enum, etc.).
+pub fn (sym Symbol) get_methods(loader SymbolInfoLoader) ?[]Symbol {
 	if !sym.is_type_defining_kind() {
 		return none
 	}
 
-	mut syms := []&Symbol{}
+	mut syms := []Symbol{}
 
-	for child in sym.children_syms {
+	for child in sym.get_children(loader) {
 		if child.kind == .function {
 			syms << child
 		}
@@ -564,47 +558,50 @@ pub fn (sym &Symbol) get_methods() ?[]&Symbol {
 
 // deref returns internal symbol of a reference symbol, return none on a non-reference
 // symbol
-pub fn (sym &Symbol) deref() ?&Symbol {
+pub fn (sym Symbol) deref(loader SymbolInfoLoader) ?Symbol {
 	if !sym.is_reference() {
 		return none
 	}
 
-	return if isnil(sym.parent_sym) {
+	return if sym.parent != analyzer.void_sym_id {
 		none
 	} else {
-		sym.parent_sym
+		sym.get_parent(loader)
 	}
 }
 
 // deref_all deref a symbol until it's no longer a reference, returns extracted
 // internal symbol. Returns none if a symbol is not a reference.
-pub fn (sym &Symbol) deref_all() ?&Symbol {
+pub fn (sym Symbol) deref_all(loader SymbolInfoLoader) ?Symbol {
 	if !sym.is_reference() {
 		return none
 	}
 
-	mut target := sym.parent_sym
-	for !isnil(target) && target.kind == .ref {
-		target = target.parent_sym
+	mut target := sym.get_parent(loader)
+	for target.id != analyzer.void_sym_id && target.kind == .ref {
+		target = target.get_parent(loader)
 	}
 
-	return if isnil(target) {
+	return if target.id == void_sym_id {
 		none
 	} else {
-		sym.parent_sym
+		target
 	}
 }
 
-pub fn is_interface_satisfied(sym &Symbol, interface_sym &Symbol) bool {
-	if sym.kind != .struct_ && sym.kind != .typedef && sym.kind != .sumtype {
+// is_interface_satisfied checks if a symbol safisfies given interface.
+pub fn is_interface_satisfied(loader SymbolInfoLoader, sym &Symbol, interface_sym &Symbol) bool {
+	if sym.kind !in [.struct_, .typedef, .sumtype] {
 		return false
 	} else if interface_sym.kind != .interface_ {
 		return false
 	}
 
+	children := sym.get_children(loader)
+	interface_children = interface_sym.get_children(loader)
 	for i in 0 .. interface_sym.interface_children_len {
-		spec_sym := interface_sym.children_syms[i]
-		selected_child_sym := sym.children_syms.get(spec_sym.name) or { return false }
+		spec_sym := interface_children[i]
+		selected_child_sym := children.get(spec_sym.name) or { return false }
 		if spec_sym.kind == .field {
 			if selected_child_sym.access != spec_sym.access
 				|| selected_child_sym.kind != spec_sym.kind
