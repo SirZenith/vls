@@ -73,7 +73,7 @@ pub fn (mut ss Store) report(report Report) {
 [if trace ?]
 pub fn (mut ss Store) report_resolve(file_path string) {
 	file_id := ss.get_file_id_for_path_opt(file_path) or { return }
-	ss.resolver.report(mut ss.reporter, file_id, file_path)
+	ss.resolver.report(ss.symbol_mgr, mut ss.reporter, file_id, file_path)
 }
 
 [if trace ?]
@@ -160,7 +160,8 @@ pub fn (ss &Store) get_module_path_from_sym(file_path string, symbol_name string
 }
 
 // get_module_path returns module path corresponding to name `module_name` in
-// given file. If nothing is found, it will return directory path of that file.
+// given file. If module named `module_name` were not imported in given file,
+// directory path of target file is returned instead.
 pub fn (ss &Store) get_module_path(file_path string, module_name string) string {
 	// empty names should return the current selected dir instead
 	return ss.get_module_path_opt(file_path, module_name) or { os.dir(file_path) }
@@ -173,31 +174,35 @@ pub fn (ss &Store) find_symbol(file_path string, module_name string, name string
 	}
 
 	module_path := ss.get_module_path(file_path, module_name)
-	idx := ss.symbols[module_path].index(name)
+	module_symbols := ss.symbol_mgr.get_infos_by_module_path(module_path)
+	idx := module_symbols.index(name)
 	if idx != -1 {
-		return ss.symbols[module_path][idx]
+		return module_symbols[idx]
 	}
 
 	if aliased_path := ss.auto_imports[module_name] {
-		idx_from_alias := ss.symbols[aliased_path].index(name)
+		symbols := ss.symbol_mgr.get_infos_by_module_path(aliased_path)
+		idx_from_alias := symbols.index(name)
 		if idx_from_alias != -1 {
-			return ss.symbols[aliased_path][idx_from_alias]
+			return symbols[idx_from_alias]
 		}
 	}
 
 	// Find C.Foo or JS.Foo
 	if binded_module_path := ss.binded_symbol_locations.get_path(name) {
-		idx_from_binded := ss.symbols[binded_module_path].index(name)
+		symbols := ss.symbol_mgr.get_infos_by_module_path(binded_module_path)
+		idx_from_binded := symbols.index(name)
 		if idx_from_binded != -1 {
-			return ss.symbols[binded_module_path][idx_from_binded]
+			return symbols[idx_from_binded]
 		}
 	}
 
 	// Find symbol if it selectively imported from module
 	if mod_path := ss.get_module_path_from_sym(file_path, name) {
-		idx_from_selective := ss.symbols[mod_path].index(name)
+		symbols := ss.symbol_mgr.get_infos_by_module_path(binded_module_path)
+		idx_from_selective := symbols.index(name)
 		if idx_from_selective != -1 {
-			return ss.symbols[mod_path][idx_from_selective]
+			return symbols[idx_from_selective]
 		}
 	}
 
@@ -205,13 +210,14 @@ pub fn (ss &Store) find_symbol(file_path string, module_name string, name string
 }
 
 // find_fn_symbol finds the function symbol with the appropriate parameters and return type
-pub fn (ss &Store) find_fn_symbol(file_path string, module_name string, return_sym &Symbol, params []&Symbol) ?&Symbol {
+pub fn (ss &Store) find_fn_symbol(file_path string, module_name string, return_sym &Symbol, params []&Symbol) ?Symbol {
 	module_path := ss.get_module_path(file_path, module_name)
-	symbols := ss.symbols[module_path] or { return none }
+	symbols := ss.symbol_mgr.get_infos_by_module_path(module_path)
 	for sym in symbols {
 		mut final_sym := unsafe { sym }
-		if sym.kind == .typedef && sym.parent_sym.kind == .function_type {
-			final_sym = sym.parent_sym
+		parent := ss.symbol_mgr.get_parent(sym)
+		if sym.kind == .typedef && parent_sym.kind == .function_type {
+			final_sym = parent_sym
 		}
 
 		if final_sym.kind == .function_type && final_sym.name.starts_with(analyzer.anon_fn_prefix)
@@ -278,13 +284,13 @@ pub fn (ss Store) get_ident_of_symbol_id(id SymbolID) ?string {
 }
 
 // get_symbols_by_file_path retrieves all symbols defined in given file.
-pub fn (ss &Store) get_symbols_by_file_path(file_path string) []SymbolID {
+pub fn (ss Store) get_symbols_by_file_path(file_path string) []SymbolID {
 	file_id := ss.get_file_id_for_path_opt(file_path) or {
 		return []
 	}
 	dir := os.dir(file_path)
 
-	return ss.symbol_mgr.get_symbols_by_path(dir, file_id)
+	return ss.symbol_mgr.get_symbols_by_file_id(dir, file_id)
 }
 
 // has_file_path checks if the data of a specific file_path already exists
@@ -335,52 +341,11 @@ pub fn (mut ss Store) delete(dir string, excluded_dir ...string) {
 		}
 	}
 }
-// -----------------------------------------------------------------------------
 
 // register_symbol registers or updates a symbol with given info, and returns
 // ID of changed symbol.
 pub fn (mut ss Store) register_symbol(info Symbol) !SymbolID {
-	file_path := ss.get_file_path_for_symbol(info) or {
-		return error('invalid symbol file id: ${info.file_id}')
-	}
-	dir := os.dir(file_path)
-
-	mut existing_idx := ss.symbols[dir].index(info.name)
-	if existing_idx == -1 && info.kind != .placeholder
-		&& info.kind !in analyzer.container_symbol_kinds {
-		// find by row, in case this is a reanme operation of existing symbol
-		existing_idx = ss.symbols[dir].index_by_row(info.file_id, info.range.start_point.row)
-	}
-
-	id := if existing_idx != -1 && info.kind != .typedef && ss.symbols[dir][existing_idx].kind != .function_type {
-		old_id := ss.symbols[dir][existing_idx]
-		ss.update_existing_symbol(old_id, info)!
-	} else {
-		new_id := ss.create_new_symbol_with(info)
-		ss.symbols[dir] << new_id
-
-		if info.language != .v {
-			ss.binded_symbol_locations << BindedSymbolLocation{
-				for_sym_name: info.name
-				language: info.language
-				module_path: ss.get_file_path_for_id(info.file_id) or { '' }
-			}
-		}
-
-		new_id
-	}
-
-	if ident := ss.get_ident_of_symbol_id(id) {
-		sym := ss.get_symbol_info(id)
-		ss.trace_report(
-			kind: .notice
-			message: 'resolving references to ${sym.name}'
-			range: sym.range
-		)
-		ss.resolver.resolve_with(ident, sym)
-	}
-
-	return id
+	return ss.symbol_mgr.register_symbol(mut ss, info)!
 }
 
 // -----------------------------------------------------------------------------

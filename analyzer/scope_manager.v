@@ -37,9 +37,9 @@ fn (mgr &ScopeManager) get_info_ref(id ScopeID) !&ScopeTree {
 
 // get_infos returns a array of copy for given ID list.
 pub fn (mgr ScopeManager) get_infos(ids []ScopeID) []ScopeTree {
-	mut sopes := []
+	mut scopes := []ScopeTree{}
 	for id in ids {
-		scopes << ss.get_info(id)
+		scopes << mgr.get_info(id)
 	}
 	return scopes
 }
@@ -47,7 +47,10 @@ pub fn (mgr ScopeManager) get_infos(ids []ScopeID) []ScopeTree {
 // get_file_scope_id returns file scope id for given file. Returns `none` if such
 // file were never opened.
 pub fn (mgr ScopeManager) get_file_scope_id(file_path string) ?ScopeID {
-	return mgr.file_scopes[file_path] or { none }
+	if file_path !in mgr.file_scopes {
+		return none
+	}
+	return mgr.file_scopes[file_path]
 }
 
 // get_file_scope returns a copy of file scope specified by `file_path`. Returns
@@ -75,8 +78,8 @@ pub fn (mut mgr ScopeManager) create_new_scope_child_for(id ScopeID, child Scope
 		return analyzer.empty_scope_id
 	}
 	new_id := mgr.create_new_scope_with(child)
-	mgr.update_scope_parent(new_id, scope.id)
-	mgr.add_scope_child(scope.id, new_id)
+	mgr.update_scope_parent(new_id, id) or {}
+	mgr.add_scope_child(id, new_id) or {}
 	return new_id
 }
 
@@ -100,7 +103,7 @@ pub fn (mut mgr ScopeManager) update_scope_parent(id ScopeID, parent_id ScopeID)
 // ID of modified scope. Returns error if target scope were not found.
 pub fn (mut mgr ScopeManager) add_scope_child(id ScopeID, child_id ScopeID) !ScopeID {
 	mut scope := mgr.get_info_ref(id)!
-	scope.add_child(child)
+	scope.add_child(child_id)
 	return id
 }
 
@@ -121,7 +124,7 @@ pub fn (mgr ScopeManager) get_parent(scope ScopeTree) ScopeTree {
 // get_parent_of_id returns copy of scope `id`'s parent scope.
 [inline]
 pub fn (mgr ScopeManager) get_parent_of_id(id ScopeID) ScopeTree {
-	scope := mgr.get_info_ref(id) or { analyzer.empty_scope }
+	scope := mgr.get_info_ref(id) or { &analyzer.empty_scope }
 	return scope.get_parent(mgr)
 }
 
@@ -134,21 +137,21 @@ pub fn (mgr ScopeManager) get_children(scope ScopeTree) []ScopeTree {
 // get_children_of_id returns copy of scope `id`'s children in an array.
 [inline]
 pub fn (mgr ScopeManager) get_children_of_id(id ScopeID) []ScopeTree {
-	scope := mgr.get_info_ref(id) or { analyzer.empty_scope }
+	scope := mgr.get_info_ref(id) or { &analyzer.empty_scope }
 	return scope.get_children(mgr)
 }
 
 // get_symbols returns copy of symbols defined in given scope in an array.
 [inline]
-pub fn (mgr ScopeManager) get_symbols(sym_mgr SymbolManager, scope ScopeTree) []Symbol {
-	return scope.get_symbols(sym_mgr)
+pub fn (mgr ScopeManager) get_symbols(sym_loader SymbolInfoLoader, scope ScopeTree) []Symbol {
+	return scope.get_symbols(sym_loader)
 }
 
 // get_symbols returns copy of symbols defined  in scope `id` in an array.
 [inline]
-pub fn (mgr ScopeManager) get_symbols_of_id(sym_mgr SymbolManager, id ScopeID) []Symbol {
-	scope := mgr.get_info_ref(id) or { analyzer.empty_scope }
-	return scope.get_symbols(sym_mgr)
+pub fn (mgr ScopeManager) get_symbols_of_id(sym_loader SymbolInfoLoader, id ScopeID) []Symbol {
+	scope := mgr.get_info_ref(id) or { &analyzer.empty_scope }
+	return scope.get_symbols(sym_loader)
 }
 
 // get_scope_from_node returns the scope node belongs to. A new scope will be
@@ -158,22 +161,23 @@ pub fn (mut mgr ScopeManager) get_scope_from_node(file_path string, node ast.Nod
 		return error('unable to create scope')
 	}
 
+	start_byte, end_byte := node.start_byte(), node.end_byte()
 	id := if node.type_name == .source_file {
 		if old_id := mgr.get_file_scope_id(file_path) {
 			mgr.update_scope(old_id, ScopeTree{
 				...mgr.get_info(old_id)
-				start_byte: node.start_byte()
-				end_byte: node.end_byte()
-			})
+				start_byte: start_byte
+				end_byte: end_byte
+			})!
 		} else {
 			mgr.create_new_scope_with(
-				start_byte: node.start_byte()
-				end_byte: node.end_byte()
+				start_byte: start_byte
+				end_byte: end_byte
 			)
 		}
 	} else {
 		scope := mgr.get_file_scope(file_path) or { return error('file ${file_path} has not opend scope') }
-		result := scope.find_or_create(mgr, start_byte, end_byte)
+		result := scope.find_or_create(mut mgr, start_byte, end_byte)
 		result.id
 	}
 
@@ -183,23 +187,23 @@ pub fn (mut mgr ScopeManager) get_scope_from_node(file_path string, node ast.Nod
 // register_symbol adds a symbol ID to scope `id`.
 pub fn (mut mgr ScopeManager) register_symbol(mut sym_mgr SymbolManager, id ScopeID, info Symbol) ! {
 	mut scope := mgr.get_info_ref(id)!
-	return scope.register_symbol(sym_mgr, info)
+	return scope.register_symbol(mut sym_mgr, info)
 }
 
 // remove_symbols_by_line removes all symbols in given range in scope `id`. Returns
 // true when scope is completely empty (no symbols, no children) after deleting.
-pub fn (mut mgr ScopeManager) remove_symbols_by_line(sym_mgr SymbolManager, id ScopeID, start_line u32, end_line u32) bool {
+pub fn (mut mgr ScopeManager) remove_symbols_by_line(sym_loader SymbolInfoLoader, id ScopeID, start_line u32, end_line u32) bool {
 	if !mgr.is_valid_id(id) {
 		return true
 	}
 
 	mut scope := mgr.get_info_ref(id) or { return true }
-	mut is_empty := scope.remove_symbols_by_line(sym_mgr, start_line, end_line)
+	mut is_empty := scope.remove_symbols_by_line(sym_loader, start_line, end_line)
 
 	// iterate in reverse order to ensure `delete` always delets the right element.
 	for i := scope.children.len - 1; i >= 0; i-- {
 		child_id := scope.children[i]
-		should_delete := mgr.remove_symbols_by_line(sym_mgr, child_id, start_line, end_line)
+		should_delete := mgr.remove_symbols_by_line(sym_loader, child_id, start_line, end_line)
 		if should_delete {
 			scope.children.delete(i)
 		} else {

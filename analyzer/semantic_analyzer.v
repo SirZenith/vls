@@ -117,7 +117,8 @@ fn (mut an SemanticAnalyzer) import_decl(node ast.Node) ? {
 	for i := u32(0); i < symbols_count; i++ {
 		sym_node := list.named_child(i) or { continue }
 		symbol_name := sym_node.text(an.context.text)
-		got_sym := an.context.store.symbols[module_path].get(symbol_name) or {
+		got_sym := an.context.store.symbol_mgr.get_info_by_name(module_path, symbol_name)
+		if got_sym.is_void() {
 			an.report(sym_node, 'Symbol `${symbol_name}` in module `${module_name}` not found')
 			continue
 		}
@@ -413,7 +414,7 @@ pub fn (mut an SemanticAnalyzer) return_statement(node ast.Node) {
 				// TODO: use proper checking in the future
 				// for interfaces not limited to IError
 				if expr_sym.name == 'IError' {
-					expected_sym = expr_sym
+					expected_sym = *expr_sym
 				} else {
 					expected_sym = expected_sym.final_sym()
 				}

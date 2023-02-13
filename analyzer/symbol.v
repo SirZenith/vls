@@ -151,7 +151,7 @@ interface SymbolInfoLoader {
 }
 
 pub struct Symbol {
-	id SymbolID [required]
+	id SymbolID = analyzer.void_sym_id
 pub mut:
 	name                    string
 	kind                    SymbolKind   // see SymbolKind
@@ -375,6 +375,11 @@ pub fn (sym Symbol) get_parent(loader SymbolInfoLoader) Symbol {
 [inline]
 pub fn (sym Symbol) get_return(loader SymbolInfoLoader) Symbol {
 	return loader.get_info(sym.return_sym)
+}
+
+pub fn (sym Symbol) get_child(loader SymbolInfoLoader, index int) ?Symbol {
+	id := sym.children[index] or { return none }
+	return loader.get_info(id)
 }
 
 // get_children returns copy of symbol's children in an array.

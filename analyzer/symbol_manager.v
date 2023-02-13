@@ -18,10 +18,8 @@ pub fn (mgr SymbolManager) is_valid_id(id SymbolID) bool {
 // get_info returns copy of the symobl specified by `id`. Returns `void_sym` const
 // if no such symbol were found.
 pub fn (mgr SymbolManager) get_info(id SymbolID) Symbol {
-	if !mgr.is_valid_symbol_id(id) {
-		return void_sym
-	}
-	return mgr.symbols[id]
+	sym := mgr.get_info_ref(id) or { return void_sym }
+	return *sym
 }
 
 // get_info_ref returns reference to symbol `id`. Returns error if no such symbol
@@ -33,9 +31,16 @@ fn (mgr &SymbolManager) get_info_ref(id SymbolID) !&Symbol {
 	return &mgr.symbols[id]
 }
 
+// get_info_by_name returns copy of symbol with name `name` in module specified
+// by `module_path`.
+fn (mgr SymbolManager) get_info_by_name(module_path string, name string) Symbol {
+	sym := mgr.get_info_by_name(module_path, name) or { return analyzer.void_sym }
+	return *sym
+}
+
 // get_info_ref_by_name returns reference to symbol with name `name` in module
 // specified by `module_path`.
-fn (mgr SymbolManager) get_info_ref_by_name(module_path string, name string) !&Symbol {
+fn (mgr &SymbolManager) get_info_ref_by_name(module_path string, name string) !&Symbol {
 	for _, id in mgr.module_symbols[dir] {
 		sym := mgr.get_info_ref(id) or { continue }
 		if sym.name == name {
@@ -85,6 +90,10 @@ pub fn (mut mgr SymbolManager) create_new_symbol_with(info Symbol) SymbolID {
 	mgr.symbols << sym
 
 	return id
+}
+
+pub fn (mut mgr SymbolManager) add_symbol_to_module(module_path string, id SymbolID) {
+	mgr.module_symbols[dir] << new_id
 }
 
 // update_symbol updates a symbol in store using given data. Returns ID of
@@ -166,6 +175,15 @@ pub fn (mgr SymbolManager) get_return_of_id(id SymbolID) Symbol {
 	return sym.get_return(mgr)
 }
 
+pub fn (mgr SymbolManager) get_child(sym Symbol, index int) Symbol {
+	return sym.get_child(mgr, info) or { analyzer.void_sym }
+}
+
+pub fn (mgr SymbolManager) get_child_of_id(id SymbolID, index int) Symbol {
+	sym := mgr.get_info_ref(id) or { return analyzer.void_sym }
+	return sym.get_child(mgr, index) or { analyzer.void_sym }
+}
+
 // get_children returns copy of given symbol's children in an array.
 [inline]
 pub fn (mgr SymbolManager) get_children(sym Symbol) []Symbol {
@@ -187,7 +205,7 @@ pub fn (mgr SymbolManager) get_symbol_name(id SymbolID) string {
 
 // get_symbol_names takes an array of symbol id, returns corresponding names in
 // an array.
-pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) string {
+pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) []string {
 	mut names := []string{}
 	for id in ids {
 		names << mgr.get_symbol_name(id)
@@ -214,10 +232,18 @@ pub fn (mgr SymbolManager) get_ident(store Store, sym Symbol) ?string {
 }
 
 // get_ident_of_id returns a string global identifier for symbol `id`.
-pub fn (ss Store) get_ident_of_id(store Store, id SymbolID) ?string {
+pub fn (mgr SymbolManager) get_ident_of_id(store Store, id SymbolID) ?string {
 	sym := mgr.get_info_ref(id) or { return none }
 	return mgr.get_ident_of_symbol(store, sym)
 }
+
+pub fn (mgr SymbolManager) get_fields(sym Symbol) ?[]Symbol {
+	return sym.get_fields(mgr)
+}
+
+pub fn (mgr SymbolManager) get_methods(sym Symbol) ?[]Symbol {
+	return sym.get_methods(mgr)
+	}
 
 // -----------------------------------------------------------------------------
 
@@ -252,7 +278,7 @@ pub fn (mut mgr SymbolManager) register_symbol(mut store Store, info Symbol) !Sy
 		mgr.update_existing_symbol(symbols[existing_idx].id, info)!
 	} else {
 		new_id := mgr.create_new_symbol_with(info)
-		mgr.module_symbols[dir] << new_id
+		mgr.add_symbol_to_module(dir, new_id)
 
 		if info.language != .v {
 			store.binded_symbol_locations << BindedSymbolLocation{
