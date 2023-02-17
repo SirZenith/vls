@@ -31,7 +31,7 @@ fn error_is(err IError, err_code string) bool {
 pub struct SemanticAnalyzer {
 pub mut:
 	context    AnalyzerContext
-	parent_sym &Symbol = void_sym
+	parent_sym SymbolID
 	formatter  SymbolFormatter [required]
 	// skips the local scopes and registers only
 	// the top-level ones regardless of its
@@ -47,7 +47,7 @@ fn (an &SemanticAnalyzer) with_symbol(sym &Symbol) &SemanticAnalyzer {
 	return &SemanticAnalyzer{
 		context: an.context
 		formatter: an.formatter
-		parent_sym: sym
+		parent_sym: sym.id
 		is_import: an.is_import
 	}
 }

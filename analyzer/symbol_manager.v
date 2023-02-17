@@ -34,7 +34,7 @@ fn (mgr &SymbolManager) get_info_ref(id SymbolID) !&Symbol {
 // get_info_by_name returns copy of symbol with name `name` in module specified
 // by `module_path`.
 fn (mgr SymbolManager) get_info_by_name(module_path string, name string) Symbol {
-	sym := mgr.get_info_by_name(module_path, name) or { return analyzer.void_sym }
+	sym := mgr.get_info_ref_by_name(module_path, name) or { return analyzer.void_sym }
 	return *sym
 }
 

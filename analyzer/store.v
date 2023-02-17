@@ -5,6 +5,7 @@ import structures.depgraph
 import tree_sitter
 import ast
 
+// used in symbol name of anonymous functions.
 const anon_fn_prefix = '#anon_'
 
 pub struct Store {
@@ -14,7 +15,7 @@ mut:
 	// be used as ID of that file during the life time of a store object.
 	file_paths []string
 	symbol_mgr SymbolManager
-	scope_mgr ScopeManager
+	scope_mgr  ScopeManager
 pub mut:
 	// Default reporter to be used
 	// Used for diagnostics
@@ -168,41 +169,39 @@ pub fn (ss &Store) get_module_path(file_path string, module_name string) string 
 }
 
 // find_symbol retrieves the symbol based on the given module name and symbol name
-pub fn (ss &Store) find_symbol(file_path string, module_name string, name string) !&Symbol {
+pub fn (ss &Store) find_symbol(file_path string, module_name string, name string) !Symbol {
 	if name.len == 0 {
 		return error('Name is empty.')
 	}
 
+	mut sym := void_sym
+
 	module_path := ss.get_module_path(file_path, module_name)
-	module_symbols := ss.symbol_mgr.get_infos_by_module_path(module_path)
-	idx := module_symbols.index(name)
-	if idx != -1 {
-		return module_symbols[idx]
+	sym = ss.symbol_mgr.get_info_by_name(module_path, name)
+	if !sym.is_void() {
+		return sym
 	}
 
 	if aliased_path := ss.auto_imports[module_name] {
-		symbols := ss.symbol_mgr.get_infos_by_module_path(aliased_path)
-		idx_from_alias := symbols.index(name)
-		if idx_from_alias != -1 {
-			return symbols[idx_from_alias]
+		sym = ss.symbol_mgr.get_info_by_name(aliased_path, name)
+		if !sym.is_void() {
+			return sym
 		}
 	}
 
 	// Find C.Foo or JS.Foo
 	if binded_module_path := ss.binded_symbol_locations.get_path(name) {
-		symbols := ss.symbol_mgr.get_infos_by_module_path(binded_module_path)
-		idx_from_binded := symbols.index(name)
-		if idx_from_binded != -1 {
-			return symbols[idx_from_binded]
+		sym = ss.symbol_mgr.get_info_by_name(binded_module_path, name)
+		if !sym.is_void() {
+			return sym
 		}
 	}
 
 	// Find symbol if it selectively imported from module
 	if mod_path := ss.get_module_path_from_sym(file_path, name) {
-		symbols := ss.symbol_mgr.get_infos_by_module_path(binded_module_path)
-		idx_from_selective := symbols.index(name)
-		if idx_from_selective != -1 {
-			return symbols[idx_from_selective]
+		sym = ss.symbol_mgr.get_info_by_name(mod_path, name)
+		if !sym.is_void() {
+			return sym
 		}
 	}
 
@@ -214,10 +213,12 @@ pub fn (ss &Store) find_fn_symbol(file_path string, module_name string, return_s
 	module_path := ss.get_module_path(file_path, module_name)
 	symbols := ss.symbol_mgr.get_infos_by_module_path(module_path)
 	for sym in symbols {
-		mut final_sym := unsafe { sym }
 		parent := ss.symbol_mgr.get_parent(sym)
-		if sym.kind == .typedef && parent_sym.kind == .function_type {
+
+		final_sym := if sym.kind == .typedef && parent_sym.kind == .function_type {
 			final_sym = parent_sym
+		} else {
+			sym
 		}
 
 		if final_sym.kind == .function_type && final_sym.name.starts_with(analyzer.anon_fn_prefix)
@@ -285,9 +286,7 @@ pub fn (ss Store) get_ident_of_symbol_id(id SymbolID) ?string {
 
 // get_symbols_by_file_path retrieves all symbols defined in given file.
 pub fn (ss Store) get_symbols_by_file_path(file_path string) []SymbolID {
-	file_id := ss.get_file_id_for_path_opt(file_path) or {
-		return []
-	}
+	file_id := ss.get_file_id_for_path_opt(file_path) or { return [] }
 	dir := os.dir(file_path)
 
 	return ss.symbol_mgr.get_symbols_by_file_id(dir, file_id)
@@ -295,9 +294,7 @@ pub fn (ss Store) get_symbols_by_file_path(file_path string) []SymbolID {
 
 // has_file_path checks if the data of a specific file_path already exists
 pub fn (ss &Store) has_file_path(file_path string) bool {
-	file_id := ss.get_file_id_for_path_opt(file_path) or {
-		return false
-	}
+	file_id := ss.get_file_id_for_path_opt(file_path) or { return false }
 	dir := os.dir(file_path)
 
 	return ss.symbol_mgr.has_file_id(dir, file_id)
@@ -477,109 +474,136 @@ pub fn symbol_name_from_node(node ast.Node, src_text tree_sitter.SourceText) (Sy
 	return SymbolKind.typedef, '', 'void'
 }
 
-// find_symbol_by_type_node returns a symbol based on the given type node
-pub fn (mut store Store) find_symbol_by_type_node(file_path string, node ast.Node, src_text tree_sitter.SourceText) !&Symbol {
+fn (mut store Store) find_fn_symbol_by_type_node(file_path string, node ast.Node, src_text tree_sitter.SourceText) Symbol {
+	// anonymous function
+	mut parameters := []&Symbol{}
+	if param_node := node.child_by_field_name('parameters') {
+		file_id := store.get_file_id_for_path(file_path)
+		mut ctx := new_context(
+			store: store
+			file_id: file_id
+			file_path: file_path
+			text: src_text
+		)
+		parameters << extract_parameter_list(mut ctx, param_node)
+	}
+
+	return_sym := if result_node := node.child_by_field_name('result') {
+		store.find_symbol_by_type_node(file_path, result_node, src_text) or { void_sym }
+	} else {
+		void_sym
+	}
+
+	if result := store.find_fn_symbol(file_path, module_name, return_sym, parameters) {
+		return result
+	}
+
+	file_id := store.get_file_id_for_path(file_path)
+	// TODO: register new symbol
+	mut new_sym := Symbol{
+		name: analyzer.anon_fn_prefix + store.anon_fn_counter.str()
+		file_id: file_id
+		file_version: store.cur_version
+		is_top_level: true
+		kind: sym_kind
+		return_sym: return_sym
+	}
+
+	for mut param in parameters {
+		// TODO: register all children
+		new_sym.add_child(mut *param) or { continue }
+	}
+
+	store.anon_fn_counter++
+	return new_sym
+}
+
+// find_symbol_by_type_node returns the symbol used/defined by given node. If no
+// existing symbol were found, a new symbol will be registered to store for this
+// node.
+pub fn (mut store Store) find_symbol_by_type_node(file_path string, node ast.Node, src_text tree_sitter.SourceText) !Symbol {
 	if node.is_null() || src_text.len() == 0 {
 		return error('null node or empty source text')
 	}
 
 	sym_kind, module_name, symbol_name := symbol_name_from_node(node, src_text)
+
+	// try to find existing symbol.
 	if sym_kind == .function_type {
-		mut parameters := []&Symbol{}
-		if param_node := node.child_by_field_name('parameters') {
-			file_id := store.get_file_id_for_path(file_path)
-			mut ctx := new_context(
-				store: store,
-				file_id: file_id,
-				file_path: file_path,
-				text: src_text
-			)
-			parameters << extract_parameter_list(mut ctx, param_node)
-		}
-
-		mut return_sym := unsafe { void_sym }
-		if result_node := node.child_by_field_name('result') {
-			return_sym = store.find_symbol_by_type_node(file_path, result_node, src_text) or {
-				void_sym
-			}
-		}
-
-		return store.find_fn_symbol(file_path, module_name, return_sym, parameters) or {
-			file_id := store.get_file_id_for_path(file_path)
-			mut new_sym := &Symbol{
-				name: analyzer.anon_fn_prefix + store.anon_fn_counter.str()
-				file_id: file_id
-				file_version: store.cur_version
-				is_top_level: true
-				kind: sym_kind
-				return_sym: return_sym
-			}
-
-			for mut param in parameters {
-				new_sym.add_child(mut *param) or { continue }
-			}
-
-			store.anon_fn_counter++
-			return new_sym
-		}
+		return store.find_fn_symbol_by_type_node(file_path, node, src_text)
 	}
 
-	return store.find_symbol(file_path, module_name, symbol_name) or {
-		placehoder_file_path := os.join_path(store.get_module_path(file_path, module_name), 'placeholder.vv')
-		file_id := store.get_file_id_for_path(placehoder_file_path)
-		mut new_sym := Symbol{
-			name: symbol_name
-			is_top_level: true
-			file_id: file_id
-			file_version: 0
-			kind: sym_kind
-		}
-
-		match sym_kind {
-			.array_ {
-				el_node := node.child_by_field_name('element') or { return error('') }
-				mut el_sym := store.find_symbol_by_type_node(file_path, el_node, src_text)!
-				new_sym.add_child(mut el_sym, false) or {}
-			}
-			.map_ {
-				key_node := node.child_by_field_name('key') or { return error('') }
-				mut key_sym := store.find_symbol_by_type_node(file_path, key_node, src_text)!
-				new_sym.add_child_allow_duplicated(mut key_sym, false)
-
-				value_node := node.child_by_field_name('value') or { return error('') }
-				mut val_sym := store.find_symbol_by_type_node(file_path, value_node, src_text)!
-				new_sym.add_child_allow_duplicated(mut val_sym, false)
-			}
-			.chan_, .ref, .optional, .result {
-				if symbol_name !in ['?', '!'] {
-					child_type_node := node.named_child(0) or { return error('') }
-					mut ref_sym := store.find_symbol_by_type_node(file_path, child_type_node,
-						src_text)!
-					if ref_sym.name.len != 0 {
-						new_sym.parent_sym = ref_sym
-					} else {
-						// TODO:
-						return error('empty ref sym')
-					}
-				}
-			}
-			.multi_return, .variadic {
-				types_len := node.named_child_count()
-				new_sym.children_syms = []&Symbol{cap: int(types_len)}
-				for i in u32(0) .. types_len {
-					type_node := node.named_child(i) or { continue }
-					mut type_sym := store.find_symbol_by_type_node(file_path, type_node,
-						src_text) or { continue }
-					if !type_sym.is_void() {
-						new_sym.children_syms << type_sym
-					}
-				}
-			}
-			else {}
-		}
-
-		store.register_symbol(mut new_sym)!
+	if result := store.find_symbol(file_path, module_name, symbol_name) {
+		return result
 	}
+
+	// prepare to register new symbol to store.
+	module_path := store.get_module_path(file_path, module_name)
+	placehoder_file_path := os.join_path(module_path, 'placeholder.vv')
+	file_id := store.get_file_id_for_path(placehoder_file_path)
+
+	mut new_sym := Symbol{
+		name: symbol_name
+		is_top_level: true
+		file_id: file_id
+		file_version: 0
+		kind: sym_kind
+	}
+
+	// TODO: is it better for this function to return SymbolID instead of Symbol.
+	match sym_kind {
+		.array_ {
+			value_type_node := node.child_by_field_name('element') or {
+				return error('no value type identifier found in array node')
+			}
+			value_type_sym := store.find_symbol_by_type_node(file_path, value_type_node, src_text)!
+			new_sym.add_child(el_sym) or {}
+		}
+		.map_ {
+			key_node := node.child_by_field_name('key') or {
+				return error('no key type identifier found in map node')
+			}
+			key_sym := store.find_symbol_by_type_node(file_path, key_node, src_text)!
+			new_sym.add_child_allow_duplicated(key_sym)
+
+			value_node := node.child_by_field_name('value') or {
+				return error('no value type identifier found in map node')
+			}
+			val_sym := store.find_symbol_by_type_node(file_path, value_node, src_text)!
+			new_sym.add_child_allow_duplicated(val_sym)
+		}
+		.chan_, .ref, .optional, .result {
+			if symbol_name !in ['?', '!'] {
+				child_type_node := node.named_child(0) or {
+					return error('inner type node not found in option/result type')
+				}
+				mut ref_sym := store.find_symbol_by_type_node(file_path, child_type_node,
+					src_text)!
+				if ref_sym.name.len != 0 {
+					new_sym.parent = ref_sym.id
+				} else {
+					// TODO:
+					return error('empty ref sym')
+				}
+			}
+		}
+		.multi_return, .variadic {
+			types_len := node.named_child_count()
+			for i in 0 .. types_len {
+				type_node := node.named_child(i) or { continue }
+				mut type_sym := store.find_symbol_by_type_node(file_path, type_node,
+					src_text) or { continue }
+				if !type_sym.is_void() {
+					new_sym.add_child_allow_duplicated(type_sym)
+				}
+			}
+		}
+		else {}
+	}
+
+	new_id := store.register_symbol(new_sym)!
+
+	return store.symbol_mgr.get_info(new_id)
 }
 
 // infer_symbol_from_node returns the specified symbol based on the given node.
@@ -865,7 +889,8 @@ pub fn (mut ss Store) infer_value_type_from_node(file_path string, node ast.Node
 					src_text)
 				type_name = '[]' + inferred_value_sym.name
 				return ss.find_symbol(file_path, '', type_name) or {
-					placehoder_file_path := os.join_path(ss.get_module_path(file_path, ''), 'placeholder.vv')
+					placehoder_file_path := os.join_path(ss.get_module_path(file_path,
+						''), 'placeholder.vv')
 					file_id := ss.get_file_id_for_path(placehoder_file_path)
 					mut new_array_sym := &Symbol{
 						name: type_name
@@ -1072,8 +1097,7 @@ pub fn (mut ss Store) delete_symbol_at_node(file_path string, root_node ast.Node
 					// delete the method if and only if method is not void (nor null)
 					if !fn_sym.is_void() && !fn_sym.parent_sym.is_void() {
 						mut parent_sym := unsafe { fn_sym.parent_sym }
-						child_idx := parent_sym.children_syms.index_by_row(file_id,
-							node.start_point().row)
+						child_idx := parent_sym.children_syms.index_by_row(file_id, node.start_point().row)
 						if child_idx != -1 {
 							parent_sym.children_syms.delete(child_idx)
 						}

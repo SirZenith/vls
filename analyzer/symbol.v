@@ -390,23 +390,19 @@ pub fn (sym Symbol) get_children(loader SymbolInfoLoader) []Symbol {
 
 // add_child registers a symbol as child of given parent symbol, returns
 // error when parent symbol already has a child with the same name.
-pub fn (mut sym Symbol) add_child(mut new_child_sym Symbol, add_as_parent ...bool) ! {
-	if add_as_parent.len == 0 || add_as_parent[0] {
-		new_child_sym.parent_sym = unsafe { sym }
-	}
-
+pub fn (mut sym Symbol) add_child(new_child_sym Symbol) ! {
 	// preventing duplicate field/variant in struct, enum, etc.
 	if sym.children_syms.exists(new_child_sym.name) {
 		return error('child exists. (name="${new_child_sym.name}")')
 	}
 
-	sym.children_syms << new_child_sym
+	sym.children << new_child_sym.id
 }
 
 // add_child_allow_duplicated register a symbol as child of given symbol, even
 // if parent symbol already has a child with the same name.
 pub fn (mut sym Symbol) add_child_allow_duplicated(mut new_child_sym Symbol) ! {
-	sym.children_syms << new_child_sym
+	sym.children << new_child_sym.id
 }
 
 // is_void returns true if a symbol is void/invalid
