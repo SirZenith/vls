@@ -388,6 +388,17 @@ pub fn (sym Symbol) get_children(loader SymbolInfoLoader) []Symbol {
 	return loader.get_infos(sym.children)
 }
 
+pub fn (sym Symbol) get_child_by_name(loader SymbolInfoLoader, name string) ?Symbol {
+	names := loader.get_symbol_names(sym.children)
+	index := names.index(name)
+	if index == -1 {
+		return none
+	} else {
+		id := sym.children[index]
+		return loader.get_info(id)
+	}
+}
+
 // add_child registers a symbol as child of given parent symbol, returns
 // error when parent symbol already has a child with the same name.
 pub fn (mut sym Symbol) add_child(new_child_sym Symbol) ! {
@@ -564,7 +575,7 @@ pub fn (sym Symbol) deref(loader SymbolInfoLoader) ?Symbol {
 		return none
 	}
 
-	return if sym.parent != analyzer.void_sym_id {
+	return if sym.parent == analyzer.void_sym_id {
 		none
 	} else {
 		sym.get_parent(loader)

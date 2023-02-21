@@ -222,7 +222,7 @@ pub fn (mut mgr ScopeManager) remove_symbol_by_name(sym_mgr SymbolManager, id Sc
 }
 
 // get_symbol_with_range finds symbo with name in within specific range.
-pub fn (mgr ScopeManager) get_symbol_with_range(sym_mgr SymbolManager, id ScopeID, name string, range C.TSRange) ?Symbol {
+pub fn (mgr ScopeManager) get_symbol_with_range(sym_loader SymbolInfoLoader, id ScopeID, name string, range C.TSRange) ?Symbol {
 	scope := mgr.get_info_ref(id) or { return none }
-	return scope.get_symbol_with_range(mgr, sym_mgr, name, range)
+	return scope.get_symbol_with_range(mgr, sym_loader, name, range)
 }
