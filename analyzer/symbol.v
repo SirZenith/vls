@@ -412,7 +412,7 @@ pub fn (mut sym Symbol) add_child(new_child_sym Symbol) ! {
 
 // add_child_allow_duplicated register a symbol as child of given symbol, even
 // if parent symbol already has a child with the same name.
-pub fn (mut sym Symbol) add_child_allow_duplicated(mut new_child_sym Symbol) ! {
+pub fn (mut sym Symbol) add_child_allow_duplicated(new_child_sym Symbol) {
 	sym.children << new_child_sym.id
 }
 
@@ -479,25 +479,25 @@ fn (sym Symbol) value_sym() Symbol {
 	}
 }
 
-fn (sym &Symbol) count_ptr() int {
+fn (sym Symbol) count_ptr(loader SymbolInfoLoader) int {
 	mut ptr_count := 0
-	mut starting_sym := unsafe { sym }
-	// What is it doing?
-	for !isnil(starting_sym) && starting_sym.kind == .ref {
+	mut starting_sym := sym
+	for starting_sym.id != void_sym_id && starting_sym.is_reference() {
 		ptr_count++
+		starting_sym = starting_sym.get_parent(loader)
 	}
 	return ptr_count
 }
 
 // final_sym returns the final symbol to be returned
 // from container symbols (optional types, channel types, and etc.)
-pub fn (sym &Symbol) final_sym() &Symbol {
-	match sym.kind {
+pub fn (sym Symbol) final_sym(loader SymbolInfoLoader) Symbol {
+	return match sym.kind {
 		.optional, .result {
-			return sym.parent_sym
+			sym.get_parent(loader)
 		}
 		else {
-			return sym
+			sym
 		}
 	}
 }

@@ -213,6 +213,11 @@ pub fn (mgr SymbolManager) get_symbol_names(ids []SymbolID) []string {
 	return names
 }
 
+pub fn (mgr SymbolManager) get_symbol_kind(id SymbolID) SymbolKind {
+	sym := mgr.get_info_ref(id) or { return SymbolKind.void }
+	return sym.kind
+}
+
 // get_symbol_range returns tree-sitter range of symbol `id`
 pub fn (mgr SymbolManager) get_symbol_range(id SymbolID) ?C.TSRange {
 	sym := mgr.get_info_ref(id) or { return none }
